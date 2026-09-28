@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SF Fog RFC • Game Day Media Hub</title>
+  <link rel="stylesheet" href="styles/media-hub.css">
+  <link rel="stylesheet" href="https://use.typekit.net/your-futura-id.css">
+  <style>
+    /* System Fallback for Futura */
+    body { font-family: "Futura PT", "Futura", "Helvetica Neue", Arial, sans-serif; }
+  </style>
+</head>
+<body>
+
+<div class="fog-media-portal">
+  <section class="hero-banner">
+    <h1>Game Day Media Hub</h1>
+    <p>San Francisco Fog RFC • Automated Video Highlights & Social Repurposing</p>
+  </section>
+
+  <nav class="fog-subnav">
+    <a href="#matches" class="fog-subnav__link fog-subnav__link--active">Match Clips (Bingham 2026)</a>
+    <a href="#veo" class="fog-subnav__link">Veo Ingest Queue (Syncing)</a>
+    <a href="#social" class="fog-subnav__link">Social Ready (Google Drive)</a>
+  </nav>
+
+  <div class="portal-container">
+    <main class="moment-section">
+      <div class="moment-header" style="margin-bottom: 1.5rem;">
+        <h2 id="current-match-title" style="margin: 0 0 0.25rem 0; font-size: 1.75rem; text-transform: uppercase;">SF Fog RFC vs Sydney Convicts (Bingham Cup 2026)</h2>
+        <span class="match-meta" style="color: #666; font-size: 0.95rem;">Treasure Island Pitch 1 • 2026-10-10 • Sources: Veo Cam 1 + 2 Sideline Phones</span>
+      </div>
+
+      <div class="moment-grid" id="moment-grid">
+        <!-- Rendered dynamically -->
+      </div>
+    </main>
+
+    <aside class="preview-panel">
+      <h3 style="margin-top: 0; text-transform: uppercase; letter-spacing: 0.05em; font-size: 1.1rem; color: #00243C;">Interactive Clip Preview</h3>
+      
+      <div class="format-pills">
+        <button class="fog-btn" id="btn-16x9" onclick="setPreviewRatio('16x9')">16:9 Master</button>
+        <button class="fog-btn fog-btn--secondary" id="btn-9x16" onclick="setPreviewRatio('9x16')">9:16 Reel</button>
+        <button class="fog-btn fog-btn--secondary" id="btn-1x1" onclick="setPreviewRatio('1x1')">1:1 Square</button>
+        <button class="fog-btn fog-btn--secondary" id="btn-4x5" onclick="setPreviewRatio('4x5')">4:5 Feed</button>
+      </div>
+
+      <div class="video-viewport ratio-16x9" id="video-viewport">
+        <video id="player" controls style="max-width: 100%; max-height: 100%; width: 100%;" poster="https://placehold.co/600x400/00243C/FFFFFF?text=SF+Fog+RFC+Video+Preview">
+          <source src="" type="video/mp4">
+          Your browser does not support HTML5 video.
+        </video>
+      </div>
+
+      <div class="caption-box" id="caption-box" style="display:none; background: #F8F9FA; border: 1px solid #DCDDDE; padding: 1rem; border-radius: 4px; margin-top: 1rem;">
+        <h4 style="margin: 0 0 0.5rem 0; text-transform: uppercase; font-size: 0.85rem; color: #00243C;">Suggested Social Copy</h4>
+        <p id="caption-text" style="font-size: 0.85rem; color: #141718; margin: 0 0 0.75rem 0; line-height: 1.4;"></p>
+        <button class="fog-btn fog-btn--secondary" style="width: 100%;" onclick="copyCaption()">Copy Caption & Hashtags</button>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script src="scripts/media-hub.js"></script>
+<script>
+  // Sample Match Data from Bingham Cup 2026
+  const sampleEvents = [
+    {
+      event_id: "evt_001",
+      source_id: "veo_match_half1",
+      event_type: "try",
+      start_time: 840.0,
+      end_time: 865.0,
+      duration: 25.0,
+      excitement_score: 0.96,
+      description: "Breakaway corner try down the right touchline by #11",
+      suggested_uses: ["hype_reel_hook", "story_recap"],
+      suggested_pairings: [
+        { paired_event_id: "evt_003", reason: "Sideline phone clip catches the bench eruption and try dogpile" }
+      ],
+      suggested_caption: "TRY TIME ON TREASURE ISLAND! 🏉 Fog crossing the whitewash in the Bingham Cup opener!",
+      suggested_hashtags: ["#SFFogRFC", "#FogRugby", "#InclusiveRugby", "#BinghamCup2026"]
+    },
+    {
+      event_id: "evt_002",
+      source_id: "phone_sideline_01",
+      event_type: "big_tackle",
+      start_time: 14.5,
+      end_time: 27.0,
+      duration: 12.5,
+      excitement_score: 0.91,
+      description: "Dominant blindside tackle forcing ball turnover at midfield",
+      suggested_uses: ["defensive_masterclass", "shorts_hook"],
+      suggested_pairings: [],
+      suggested_caption: "Defense setting the standard 😤 Bone-crunching hit from the Fog flanker!",
+      suggested_hashtags: ["#BigHits", "#RugbyTackles", "#SFFogRFC"]
+    },
+    {
+      event_id: "evt_003",
+      source_id: "phone_sideline_02",
+      event_type: "celebration",
+      start_time: 32.0,
+      end_time: 48.0,
+      duration: 16.0,
+      excitement_score: 0.89,
+      description: "Sideline bench and supporters cheering after the opening try",
+      suggested_uses: ["sideline_culture", "team_spirit_story"],
+      suggested_pairings: [
+        { paired_event_id: "evt_001", reason: "Pairs with Veo corner try" }
+      ],
+      suggested_caption: "The energy on the sidelines is electric! 💙🏉 Fog family in full voice!",
+      suggested_hashtags: ["#FogFamily", "#InclusiveRugby", "#SFFogRFC"]
+    },
+    {
+      event_id: "evt_004",
+      source_id: "veo_match_half1",
+      event_type: "lineout",
+      start_time: 1210.0,
+      end_time: 1232.0,
+      duration: 22.0,
+      excitement_score: 0.85,
+      description: "Clean defensive lineout steal at the 5-meter line",
+      suggested_uses: ["forward_pack_pride"],
+      suggested_pairings: [],
+      suggested_caption: "Forward pack putting in work! Huge lineout steal under pressure 💥",
+      suggested_hashtags: ["#ForwardPack", "#SetPieceDominance", "#SFFogRFC"]
+    }
+  ];
+
+  // Initialize view
+  document.addEventListener("DOMContentLoaded", () => {
+    renderMoments(sampleEvents);
+    selectClip(sampleEvents[0]);
+  });
+</script>
+</body>
+</html>
