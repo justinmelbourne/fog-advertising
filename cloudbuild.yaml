@@ -1,0 +1,43 @@
+# SF Fog RFC Rugby Video Analysis — Cloud Run Deployment Config
+# =============================================================
+# This file documents the gcloud CLI commands to deploy the Cloud Run service.
+# Run these in order from the project root directory.
+# See: docs/superpowers/google-cloud-setup.md for full setup guide.
+
+steps:
+  # 1. Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/fog-video-analysis:$COMMIT_SHA'
+      - '.'
+
+  # 2. Push to Google Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/fog-video-analysis:$COMMIT_SHA'
+
+  # 3. Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'fog-video-analysis'
+      - '--image=gcr.io/$PROJECT_ID/fog-video-analysis:$COMMIT_SHA'
+      - '--region=us-west1'
+      - '--platform=managed'
+      - '--service-account=fog-video-sa@$PROJECT_ID.iam.gserviceaccount.com'
+      - '--memory=4Gi'
+      - '--cpu=2'
+      - '--timeout=600'
+      - '--concurrency=10'
+      - '--max-instances=5'
+      - '--set-env-vars=GOOGLE_CLOUD_PROJECT=$PROJECT_ID'
+      - '--set-secrets=GEMINI_API_KEY=gemini-api-key:latest,VEO_API_TOKEN=veo-api-token:latest,DRIVE_INGEST_FOLDER_ID=drive-ingest-folder-id:latest,DRIVE_OUTPUT_FOLDER_ID=drive-output-folder-id:latest'
+      - '--no-allow-unauthenticated'
+
+images:
+  - 'gcr.io/$PROJECT_ID/fog-video-analysis:$COMMIT_SHA'

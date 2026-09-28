@@ -1,0 +1,8 @@
+# Cloud Run API dependencies (in addition to base requirements.txt)
+flask>=3.0.0
+gunicorn>=22.0.0
+google-auth>=2.29.0
+google-api-python-client>=2.127.0
+google-cloud-storage>=2.16.0
+google-cloud-secret-manager>=2.20.0
+requests>=2.31.0
