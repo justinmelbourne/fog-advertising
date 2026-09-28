@@ -1,0 +1,194 @@
+/* portal/styles/media-hub.less */
+@fog-blue: #006EB6;
+@fog-light-blue: #24A0F1;
+@fog-dark-blue: #00243C;
+@fog-gray: #DCDDDE;
+@fog-dark-gray: #141718;
+@fog-white: #FFFFFF;
+@fog-radius-btn: 2px;
+@fog-radius-card: 4px;
+
+.fog-media-portal {
+  font-family: "Futura PT", Futura, Arial, Helvetica, sans-serif;
+  color: @fog-dark-gray;
+  background-color: #F8F9FA;
+  padding: 0 0 4rem 0;
+
+  .hero-banner {
+    background-color: @fog-dark-blue;
+    color: @fog-white;
+    padding: 3.5rem 2rem;
+    border-bottom: 3px solid @fog-blue;
+
+    h1 {
+      font-size: 2.5rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin: 0 0 0.5rem 0;
+    }
+    p {
+      color: @fog-gray;
+      margin: 0;
+      font-size: 1.1rem;
+    }
+  }
+
+  .fog-subnav {
+    display: flex;
+    background: @fog-white;
+    border-bottom: 1px solid @fog-gray;
+    padding: 0 2rem;
+    gap: 1.5rem;
+
+    &__link {
+      display: inline-block;
+      padding: 1rem 0.5rem;
+      text-decoration: none;
+      color: @fog-dark-gray;
+      font-weight: 600;
+      border-bottom: 2px solid transparent;
+
+      &--active {
+        color: @fog-blue;
+        border-bottom-color: @fog-blue;
+      }
+    }
+  }
+
+  .portal-container {
+    max-width: 1440px;
+    margin: 2rem auto;
+    padding: 0 2rem;
+    display: grid;
+    grid-template-columns: 1fr 420px;
+    gap: 2rem;
+  }
+
+  .moment-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1.5rem;
+  }
+
+  .moment-card {
+    background: @fog-white;
+    border: 1px solid @fog-gray;
+    border-radius: @fog-radius-card;
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+
+    &__header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+
+    &__badge {
+      background: @fog-blue;
+      color: @fog-white;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      border-radius: @fog-radius-btn;
+    }
+
+    &__score {
+      font-size: 0.85rem;
+      color: @fog-dark-blue;
+      font-weight: bold;
+    }
+
+    &__pairings {
+      background: #F0F4F8;
+      border-left: 3px solid @fog-light-blue;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8rem;
+      margin: 0.75rem 0;
+      border-radius: 0 @fog-radius-btn @fog-radius-btn 0;
+    }
+
+    &__actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+      margin-top: 1rem;
+    }
+  }
+
+  .fog-btn {
+    border-radius: @fog-radius-btn;
+    border: 1px solid @fog-blue;
+    background: @fog-blue;
+    color: @fog-white;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    cursor: pointer;
+    text-align: center;
+    transition: background 0.15s ease, border-color 0.15s ease;
+
+    &:hover {
+      background: @fog-light-blue;
+      border-color: @fog-light-blue;
+    }
+
+    &--secondary {
+      background: transparent;
+      color: @fog-blue;
+
+      &:hover {
+        background: #EBF5FB;
+      }
+    }
+  }
+
+  .preview-panel {
+    background: @fog-white;
+    border: 1px solid @fog-gray;
+    border-radius: @fog-radius-card;
+    padding: 1.5rem;
+    height: fit-content;
+    position: sticky;
+    top: 2rem;
+
+    .video-viewport {
+      background: @fog-dark-blue;
+      border-radius: @fog-radius-btn;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+      margin: 1rem 0;
+      min-height: 240px;
+
+      &.ratio-9x16 {
+        aspect-ratio: 9 / 16;
+        max-height: 480px;
+        margin: 0 auto 1rem auto;
+      }
+      &.ratio-1x1 {
+        aspect-ratio: 1 / 1;
+      }
+      &.ratio-4x5 {
+        aspect-ratio: 4 / 5;
+        max-height: 440px;
+        margin: 0 auto 1rem auto;
+      }
+      &.ratio-16x9 {
+        aspect-ratio: 16 / 9;
+      }
+    }
+
+    .format-pills {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+  }
+}

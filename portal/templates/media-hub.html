@@ -1,0 +1,48 @@
+<!-- portal/templates/media-hub.html -->
+<div class="fog-media-portal">
+  <section class="hero-banner">
+    <h1>Game Day Media Hub</h1>
+    <p>San Francisco Fog RFC • Automated Video Highlights & Social Repurposing</p>
+  </section>
+
+  <nav class="fog-subnav">
+    <a href="#matches" class="fog-subnav__link fog-subnav__link--active">Match Clips</a>
+    <a href="#veo" class="fog-subnav__link">Veo Ingest Queue</a>
+    <a href="#social" class="fog-subnav__link">Social Ready</a>
+  </nav>
+
+  <div class="portal-container">
+    <main class="moment-section">
+      <div class="moment-header" style="margin-bottom: 1.5rem;">
+        <h2 id="current-match-title" style="margin: 0 0 0.25rem 0; font-size: 1.75rem; text-transform: uppercase;">SF Fog RFC vs San Jose Seahawks</h2>
+        <span class="match-meta" style="color: #666; font-size: 0.95rem;">Treasure Island Pitch 1 • 2026-10-10</span>
+      </div>
+
+      <div class="moment-grid" id="moment-grid">
+        <!-- Rendered dynamically by media-hub.js -->
+      </div>
+    </main>
+
+    <aside class="preview-panel">
+      <h3 style="margin-top: 0; text-transform: uppercase; letter-spacing: 0.05em;">Interactive Clip Preview</h3>
+      <div class="format-pills">
+        <button class="fog-btn fog-btn--secondary" id="btn-16x9" onclick="setPreviewRatio('16x9')">16:9 Master</button>
+        <button class="fog-btn fog-btn--secondary" id="btn-9x16" onclick="setPreviewRatio('9x16')">9:16 Reel</button>
+        <button class="fog-btn fog-btn--secondary" id="btn-1x1" onclick="setPreviewRatio('1x1')">1:1 Square</button>
+        <button class="fog-btn fog-btn--secondary" id="btn-4x5" onclick="setPreviewRatio('4x5')">4:5 Feed</button>
+      </div>
+
+      <div class="video-viewport ratio-16x9" id="video-viewport">
+        <video id="player" controls style="max-width: 100%; max-height: 100%; width: 100%;">
+          <source src="" type="video/mp4">
+        </video>
+      </div>
+
+      <div class="caption-box" id="caption-box" style="display:none; background: #F8F9FA; border: 1px solid #DCDDDE; padding: 1rem; border-radius: 4px; margin-top: 1rem;">
+        <h4 style="margin: 0 0 0.5rem 0; text-transform: uppercase; font-size: 0.85rem; color: #00243C;">Suggested Social Copy</h4>
+        <p id="caption-text" style="font-size: 0.85rem; color: #141718; margin: 0 0 0.75rem 0; line-height: 1.4;"></p>
+        <button class="fog-btn fog-btn--secondary" style="width: 100%;" onclick="copyCaption()">Copy Caption & Hashtags</button>
+      </div>
+    </aside>
+  </div>
+</div>
