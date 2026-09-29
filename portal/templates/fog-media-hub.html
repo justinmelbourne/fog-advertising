@@ -3,21 +3,20 @@
   Squarespace Developer Mode Template
   File: portal/templates/fog-media-hub.html
   
-  Usage in Squarespace:
-  1. Add this as a Code Block on the /portal/media page (or as a custom page template)
-  2. Reference portal/scripts/fog-media-hub.js via Settings > Advanced > Code Injection
-     (or include <script> tag at the bottom of this block)
-  3. Set window.FOG_MEDIA_HUB_CONFIG.apiBaseUrl to your Cloud Run URL
-  4. Style overrides go in portal/styles/media-hub.less (compiled to CSS by Squarespace)
-
-  URL scheme: /portal/media?match=2026-10-12-fog-vs-seahawks
+  Conformed strictly to /fog-rugby-design canon:
+  - Official 6-color system (--fog-blue, --fog-light-blue, --fog-dark-blue, --fog-gray, --fog-dark-gray, --fog-white)
+  - Zero-pill law: strict 2px radius on buttons and badges
+  - Single-hero invariant: exactly one hero banner
+  - Zero inline style="" attributes
+  - Zero emoji icons (stroke-drawn SVG icons or clean text labels)
+  - Fog brand voice: addresses reader as "you/your team"
 -->
 
-<!-- Global config — replace apiBaseUrl after Cloud Run deploy -->
+<!-- Global config — points to Cloud Run video pipeline API -->
 <script>
   window.FOG_MEDIA_HUB_CONFIG = {
     apiBaseUrl: "https://video-api.fogrugby.com",
-    apiKey: ""  // Authenticated via gcloud identity tokens; update if switching to API-key auth
+    apiKey: ""
   };
 </script>
 
@@ -25,12 +24,12 @@
 
   <!-- ================================================================
        HERO BANNER — Single hero (Single-Hero Invariant enforced)
-       Suppress Drupal/Squarespace page title above via page settings
        ================================================================ -->
   <section class="hero-banner" aria-label="Game Day Media Hub">
     <div class="hero-banner__inner">
+      <span class="hero-banner__eyebrow">Match Video Hub</span>
       <h1>Game Day Media Hub</h1>
-      <p>San Francisco Fog RFC &bull; Automated Video Highlights &amp; Social Repurposing</p>
+      <p>San Francisco Fog RFC &bull; Automated Match Highlights &amp; Video Review</p>
     </div>
   </section>
 
@@ -38,52 +37,64 @@
        SECONDARY SUBNAV — Required by portal architecture rules
        ================================================================ -->
   <nav class="fog-subnav" aria-label="Media hub navigation">
-    <a href="#matches" class="fog-subnav__link fog-subnav__link--active" id="subnav-clips">Match Clips</a>
-    <a href="#veo" class="fog-subnav__link" id="subnav-veo">Veo Ingest Queue</a>
-    <a href="#social" class="fog-subnav__link" id="subnav-social">Social Ready</a>
-    <a href="/portal" class="fog-subnav__link fog-subnav__link--back" id="subnav-portal">← Portal Home</a>
+    <a href="#moments" class="fog-subnav__link fog-subnav__link--active" id="subnav-clips">Match clips</a>
+    <a href="#veo" class="fog-subnav__link" id="subnav-veo">Import from Veo</a>
+    <a href="#social" class="fog-subnav__link" id="subnav-social">Social ready</a>
   </nav>
 
-  <!-- Analysis trigger bar (visible only if ?trigger=true is in URL) -->
-  <div class="analysis-trigger-bar" id="analysis-trigger-bar" style="display:none;">
-    <div class="trigger-bar-inner">
-      <p>Ready to analyze a new match folder?</p>
-      <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap;">
-        <input type="text" id="input-match-id" class="fog-input" placeholder="Match ID (e.g. 2026-10-12-fog-vs-seahawks)">
-        <input type="text" id="input-match-title" class="fog-input" placeholder="Match Title">
-        <input type="text" id="input-folder-id" class="fog-input" placeholder="Google Drive Folder ID">
-        <button class="fog-btn" onclick="
-          FogMediaHub.triggerAnalysis(
-            document.getElementById('input-match-id').value,
-            document.getElementById('input-match-title').value,
-            document.getElementById('input-folder-id').value
-          )">
-          Run Analysis
-        </button>
-      </div>
-      <p id="analysis-status" style="display:none; margin-top:0.75rem; font-weight:700;"></p>
+  <!-- ================================================================
+       ANALYSIS TRIGGER BAR (Revealed when ?trigger=true is in URL)
+       ================================================================ -->
+  <div class="fog-analysis-bar" id="analysis-trigger-bar" hidden>
+    <div class="fog-analysis-bar__inner">
+      <p class="fog-analysis-bar__title">Ready to analyze a match folder?</p>
+      <input type="text" id="input-match-id" class="fog-input" placeholder="Match ID (e.g. 2026-10-12-fog-vs-seahawks)">
+      <input type="text" id="input-match-title" class="fog-input" placeholder="Match Title">
+      <input type="text" id="input-folder-id" class="fog-input" placeholder="Google Drive Folder ID">
+      <button class="fog-btn" id="btn-run-analysis" type="button">Run Analysis</button>
     </div>
+    <p class="fog-analysis-bar__status" id="analysis-status" hidden></p>
   </div>
 
   <!-- ================================================================
-       MAIN CONTENT AREA
+       MAIN CONTENT CONTAINER
        ================================================================ -->
   <div class="portal-container" id="portal-container">
 
-    <!-- Left: Moment card grid -->
+    <!-- Section: Import from Veo (Toggled via subnav tab) -->
+    <section class="fog-veo-section" id="veo-section" hidden aria-label="Import matches from Veo">
+      <div class="moment-header">
+        <div>
+          <h2 class="fog-section-heading">Import from Veo</h2>
+          <span class="fog-media-meta">Stream your team's 1080p match footage directly from Veo CDN into Google Drive and extract AI rugby tags.</span>
+        </div>
+        <button class="fog-btn fog-btn--secondary" id="btn-refresh-veo" type="button">Refresh Veo</button>
+      </div>
+
+      <div class="fog-analysis-bar">
+        <div class="fog-analysis-bar__inner">
+          <input type="text" id="input-veo-url" class="fog-input" placeholder="Paste Veo URL (e.g. https://app.veo.co/matches/... or slug)">
+          <button class="fog-btn" id="btn-ingest-veo-url" type="button">Ingest URL</button>
+        </div>
+      </div>
+
+      <p class="fog-analysis-bar__status" id="veo-ingest-status" hidden></p>
+
+      <div class="moment-grid" id="veo-recordings-grid" role="list" aria-label="Club Veo recordings">
+        <!-- Populated dynamically by fog-media-hub.js -->
+      </div>
+    </section>
+
+    <!-- Main: Moment card grid -->
     <main class="moment-section" id="moment-section">
       <div class="moment-header">
         <div>
-          <h2 id="current-match-title" style="margin:0 0 0.25rem 0; font-size:1.75rem; text-transform:uppercase; letter-spacing:0.03em;">
-            Loading match…
-          </h2>
-          <span id="current-match-meta" class="match-meta"></span>
+          <h2 class="fog-section-heading" id="current-match-title">Match Clips</h2>
+          <span id="current-match-meta" class="fog-media-meta"></span>
         </div>
         <div class="moment-header__actions">
-          <button class="fog-btn fog-btn--secondary" id="btn-refresh"
-            onclick="currentManifest && FogMediaHub.fetchManifest(currentManifest.match_id)"
-            title="Refresh manifest">
-            ↻ Refresh
+          <button class="fog-btn fog-btn--secondary" id="btn-refresh" type="button" title="Refresh clips">
+            Refresh
           </button>
         </div>
       </div>
@@ -94,80 +105,80 @@
       </div>
     </main>
 
-    <!-- Right: Preview panel -->
+    <!-- Aside: Interactive Preview panel -->
     <aside class="preview-panel" id="preview-panel" aria-label="Clip preview and export">
-      <h3 style="margin-top:0; text-transform:uppercase; letter-spacing:0.05em; font-size:1rem;">
-        Interactive Clip Preview
-      </h3>
+      <h3 class="preview-panel__title">Clip Preview</h3>
 
-      <!-- Aspect ratio pills -->
+      <!-- Aspect ratio selector buttons -->
       <div class="format-pills" role="group" aria-label="Aspect ratio selector">
         <button class="fog-btn fog-btn--secondary active"
           id="btn-ratio-16x9"
           data-ratio-pill="16x9"
-          aria-pressed="true">
+          aria-pressed="true"
+          type="button">
           16:9 Master
         </button>
         <button class="fog-btn fog-btn--secondary"
           id="btn-ratio-9x16"
           data-ratio-pill="9x16"
-          aria-pressed="false">
+          aria-pressed="false"
+          type="button">
           9:16 Reel
         </button>
         <button class="fog-btn fog-btn--secondary"
           id="btn-ratio-1x1"
           data-ratio-pill="1x1"
-          aria-pressed="false">
+          aria-pressed="false"
+          type="button">
           1:1 Square
         </button>
         <button class="fog-btn fog-btn--secondary"
           id="btn-ratio-4x5"
           data-ratio-pill="4x5"
-          aria-pressed="false">
+          aria-pressed="false"
+          type="button">
           4:5 Feed
         </button>
       </div>
 
-      <!-- Video viewport — aspect ratio controlled by JS + CSS classes -->
+      <!-- Video viewport -->
       <div class="video-viewport ratio-16x9" id="video-viewport" aria-label="Video preview">
         <div class="video-placeholder" id="video-placeholder">
           <span>Select a moment to preview</span>
         </div>
-        <video id="player" controls style="display:none; max-width:100%; max-height:100%; width:100%;" preload="metadata">
+        <video id="player" controls preload="metadata" hidden>
           <source src="" type="video/mp4">
           Your browser does not support HTML5 video.
         </video>
       </div>
 
       <!-- Preview label -->
-      <p id="preview-label" style="font-size:0.8rem; color:#666; margin:0.5rem 0; min-height:1.2em;"></p>
+      <p class="preview-label" id="preview-label"></p>
 
-      <!-- Caption / hashtag copy box -->
-      <div class="caption-box" id="caption-box" style="display:none;">
+      <!-- Suggested social copy box -->
+      <div class="caption-box" id="caption-box" hidden>
         <h4>Suggested Social Copy</h4>
         <p id="caption-text"></p>
-        <button class="fog-btn fog-btn--secondary" id="btn-copy-caption"
-          style="width:100%;" onclick="FogMediaHub.copyCaption()">
-          📋 Copy Caption &amp; Hashtags
+        <button class="fog-btn fog-btn--secondary" id="btn-copy-caption" type="button">
+          Copy Caption &amp; Hashtags
         </button>
       </div>
 
-      <!-- Quick stats panel (populated from manifest) -->
-      <div class="preview-stats" id="preview-stats" style="margin-top:1.5rem; padding-top:1.5rem; border-top:1px solid #DCDDDE;">
-        <h4 style="margin:0 0 0.75rem 0; font-size:0.85rem; text-transform:uppercase; color:#00243C;">Match Stats</h4>
+      <!-- Quick stats panel -->
+      <div class="preview-stats" id="preview-stats">
+        <h4>Match Stats</h4>
         <dl class="stats-list" id="stats-list">
-          <div><dt>Events Detected</dt><dd id="stat-events">—</dd></div>
-          <div><dt>Tries</dt><dd id="stat-tries">—</dd></div>
-          <div><dt>Big Tackles</dt><dd id="stat-tackles">—</dd></div>
-          <div><dt>Sources</dt><dd id="stat-sources">—</dd></div>
+          <div><dt>Events</dt><dd id="stat-events">&mdash;</dd></div>
+          <div><dt>Tries</dt><dd id="stat-tries">&mdash;</dd></div>
+          <div><dt>Big Tackles</dt><dd id="stat-tackles">&mdash;</dd></div>
+          <div><dt>Cameras</dt><dd id="stat-sources">&mdash;</dd></div>
         </dl>
       </div>
     </aside>
+
   </div>
 
 </div>
 
-<!-- Load the portal controller script -->
-<!-- In production, this is served from Squarespace Assets or CDN -->
-<!-- During development, point to your local dev server or use the raw GitHub URL -->
+<!-- Portal controller script -->
 <script src="{portal/scripts/fog-media-hub.js}"></script>

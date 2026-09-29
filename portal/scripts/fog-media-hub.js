@@ -41,7 +41,7 @@
 
   const CONFIG = Object.assign(
     {
-      apiBaseUrl: "https://fog-video-analysis-XXXX-uw.a.run.app", // Replace after deploy
+      apiBaseUrl: "https://video-api.fogrugby.com",
       apiKey: "",       // Injected via Squarespace Settings > Advanced > Code Injection
       defaultMatchId: "", // Pre-populate from URL param or Squarespace Collection data
     },
@@ -57,20 +57,192 @@
   let currentRatio = "16x9";
 
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
   // Entry point — called once DOM is ready
   // -------------------------------------------------------------------------
 
   function init() {
-    const matchId = _getMatchIdFromUrl() || CONFIG.defaultMatchId;
-
-    if (!matchId) {
-      _showError("No match selected. Append ?match=MATCH_ID to the URL or configure a default.");
-      return;
-    }
-
-    _showLoadingState();
-    fetchManifest(matchId);
+    _setupSubnav();
     _setupRatioPills();
+    _setupVeoControls();
+
+    var matchId = _getMatchIdFromUrl() || CONFIG.defaultMatchId;
+    if (matchId) {
+      _showTab("moments");
+      _showLoadingState();
+      fetchManifest(matchId);
+    } else {
+      _showTab("veo");
+      loadVeoRecordings();
+    }
+  }
+
+  function _showTab(tab) {
+    var clipsLink = document.getElementById("subnav-clips");
+    var veoLink = document.getElementById("subnav-veo");
+    var momentsSection = document.getElementById("moment-section");
+    var previewPanel = document.getElementById("preview-panel");
+    var veoSection = document.getElementById("veo-section");
+
+    if (tab === "veo") {
+      if (clipsLink) clipsLink.classList.remove("fog-subnav__link--active");
+      if (veoLink) veoLink.classList.add("fog-subnav__link--active");
+      if (momentsSection) momentsSection.hidden = true;
+      if (previewPanel) previewPanel.hidden = true;
+      if (veoSection) veoSection.hidden = false;
+    } else {
+      if (clipsLink) clipsLink.classList.add("fog-subnav__link--active");
+      if (veoLink) veoLink.classList.remove("fog-subnav__link--active");
+      if (momentsSection) momentsSection.hidden = false;
+      if (previewPanel) previewPanel.hidden = false;
+      if (veoSection) veoSection.hidden = true;
+    }
+  }
+
+  function _setupSubnav() {
+    var clipsLink = document.getElementById("subnav-clips");
+    var veoLink = document.getElementById("subnav-veo");
+
+    if (clipsLink) {
+      clipsLink.addEventListener("click", function (e) {
+        e.preventDefault();
+        _showTab("moments");
+      });
+    }
+    if (veoLink) {
+      veoLink.addEventListener("click", function (e) {
+        e.preventDefault();
+        _showTab("veo");
+        loadVeoRecordings();
+      });
+    }
+  }
+
+  function _setupVeoControls() {
+    var refreshBtn = document.getElementById("btn-refresh-veo");
+    var ingestBtn = document.getElementById("btn-ingest-veo-url");
+    var urlInput = document.getElementById("input-veo-url");
+
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", function () {
+        loadVeoRecordings();
+      });
+    }
+    if (ingestBtn && urlInput) {
+      ingestBtn.addEventListener("click", function () {
+        var val = urlInput.value.trim();
+        if (val) {
+          ingestVeoMatch(val);
+        }
+      });
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Veo Ingest API
+  // -------------------------------------------------------------------------
+
+  function loadVeoRecordings() {
+    var grid = document.getElementById("veo-recordings-grid");
+    if (!grid) return;
+
+    grid.innerHTML = '<p class="fog-media-state fog-media-state--loading">Loading recordings from Veo clubhouse…</p>';
+
+    _apiFetch("/veo/recordings")
+      .then(function (data) {
+        var items = data.recordings || [];
+        if (!items.length) {
+          grid.innerHTML = '<p class="fog-media-state">No recordings found for The Fog.</p>';
+          return;
+        }
+        _renderVeoRecordings(items);
+      })
+      .catch(function (err) {
+        grid.innerHTML = '<p class="fog-media-state fog-media-state--error">Failed to connect to Veo API: ' + _escapeHtml(err.message) + '</p>';
+      });
+  }
+
+  function _renderVeoRecordings(recordings) {
+    var grid = document.getElementById("veo-recordings-grid");
+    if (!grid) return;
+    grid.innerHTML = "";
+
+    recordings.forEach(function (rec) {
+      var card = document.createElement("article");
+      card.className = "moment-card";
+
+      var thumb = rec.thumbnail || "";
+      var title = rec.title || "SF Fog Match";
+      var dateStr = rec.start ? new Date(rec.start).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "";
+      var durStr = _formatDuration(rec.duration || 0);
+
+      var html = "";
+      html += '<div class="moment-card__header">';
+      html += '<span class="moment-card__badge">Veo Match</span>';
+      html += '<span class="moment-card__score moment-card__score--mid">1080p HD</span>';
+      html += '</div>';
+
+      if (thumb) {
+        html += '<img class="moment-card__thumb" src="' + _escapeHtml(thumb) + '" alt="' + _escapeHtml(title) + '" loading="lazy">';
+      }
+
+      html += '<div class="moment-card__body">';
+      html += '<h3 class="moment-card__title">' + _escapeHtml(title) + '</h3>';
+      html += '<p class="moment-card__meta">' + _escapeHtml(dateStr) + " • " + _escapeHtml(durStr) + '</p>';
+      html += '<div class="moment-card__actions moment-card__actions--single">';
+      html += '<button class="fog-button fog-button--primary btn-ingest-card" type="button">Import &amp; Analyze</button>';
+      html += '</div>';
+      html += '</div>';
+
+      card.innerHTML = html;
+
+      var btn = card.querySelector(".btn-ingest-card");
+      if (btn) {
+        btn.addEventListener("click", function () {
+          btn.disabled = true;
+          btn.textContent = "Importing…";
+          ingestVeoMatch(rec.slug || rec.identifier, rec.title);
+        });
+      }
+
+      grid.appendChild(card);
+    });
+  }
+
+  function ingestVeoMatch(slugOrUrl, title) {
+    var statusEl = document.getElementById("veo-ingest-status");
+    if (statusEl) {
+      statusEl.textContent = "Streaming 1080p match video from Veo CDN to Google Drive & analyzing rugby tags… this takes ~30-60s.";
+      statusEl.hidden = false;
+    }
+    _showToast("Ingest started for " + (title || slugOrUrl) + "…");
+
+    _apiFetch("/veo/ingest", {
+      method: "POST",
+      body: JSON.stringify({
+        match: slugOrUrl,
+        title: title
+      }),
+    })
+      .then(function (result) {
+        if (statusEl) {
+          statusEl.textContent = "Ingested! " + result.events_count + " rugby moments detected. Redirecting to clips…";
+        }
+        _showToast("Match ingested! " + result.events_count + " moments ready.");
+        currentManifest = result.manifest;
+        _renderMatchHeader(result.manifest);
+        _renderMomentGrid(result.manifest.events || []);
+        setTimeout(function () {
+          _showTab("moments");
+          if (statusEl) statusEl.hidden = true;
+        }, 1500);
+      })
+      .catch(function (err) {
+        if (statusEl) {
+          statusEl.textContent = "Ingest failed: " + err.message;
+        }
+        _showToast("Ingest error: " + err.message, true);
+      });
   }
 
   // -------------------------------------------------------------------------
@@ -113,19 +285,19 @@
     })
       .then(function (result) {
         _showToast(
-          "✅ " + format + " clip ready! Saved to Drive. File ID: " + result.drive_file_id
+          "" + format + " clip ready! Saved to Drive. File ID: " + result.drive_file_id
         );
         if (btn) {
           btn.disabled = false;
-          btn.textContent = format + " ✓";
-          btn.classList.add("fog-btn--success");
+          btn.textContent = format + " saved";
+          btn.classList.add("fog-button--confirmed");
         }
       })
       .catch(function (err) {
-        _showToast("❌ Export failed: " + err.message, true);
+        _showToast("Export failed: " + err.message, true);
         if (btn) {
           btn.disabled = false;
-          btn.textContent = format + " Retry";
+          btn.textContent = format + "Retry";
         }
         console.error("[FogMediaHub] extract failed:", err);
       });
@@ -138,8 +310,8 @@
   function triggerAnalysis(matchId, matchTitle, folderId) {
     const statusEl = document.getElementById("analysis-status");
     if (statusEl) {
-      statusEl.textContent = "⏳ Analysis running… this may take a few minutes.";
-      statusEl.style.display = "block";
+      statusEl.textContent = "Analysis running… this may take a few minutes.";
+      statusEl.hidden = false;
     }
 
     _apiFetch("/analyze", {
@@ -153,7 +325,7 @@
       .then(function (result) {
         if (statusEl) {
           statusEl.textContent =
-            "✅ Analysis complete! " + result.events_found + " moments detected.";
+            "Analysis complete! " + result.events_found + " moments detected.";
         }
         currentManifest = result.manifest;
         _renderMatchHeader(result.manifest);
@@ -161,7 +333,7 @@
       })
       .catch(function (err) {
         if (statusEl) {
-          statusEl.textContent = "❌ Analysis failed: " + err.message;
+          statusEl.textContent = "Analysis failed: " + err.message;
         }
         console.error("[FogMediaHub] analysis failed:", err);
       });
@@ -192,7 +364,7 @@
 
     if (!events || events.length === 0) {
       container.innerHTML =
-        '<p style="color:#666; padding: 2rem 0; grid-column: 1/-1;">No moments detected yet. ' +
+        '<p class="fog-media-state">No moments detected yet. ' +
         "Trigger analysis or check back after the video processing completes.</p>";
       return;
     }
@@ -206,8 +378,12 @@
 
   function _buildMomentCard(ev) {
     var excitement = Math.round((ev.excitement_score || 0) * 100);
-    var scoreColor =
-      excitement >= 85 ? "#157A38" : excitement >= 65 ? "#006EB6" : "#666";
+    // Colour comes from a modifier, never a hex. The percentage is always on
+    // the element, so colour is not the only signal.
+    var scoreClass =
+      excitement >= 85 ? " moment-card__score--high"
+        : excitement >= 65 ? " moment-card__score--mid"
+        : "";
 
     var pairingHtml = "";
     if (ev.suggested_pairings && ev.suggested_pairings.length > 0) {
@@ -242,12 +418,12 @@
       "<div>" +
       '<div class="moment-card__header">' +
       '<span class="moment-card__badge">' + _escapeHtml(ev.event_type).toUpperCase() + "</span>" +
-      '<span class="moment-card__score" style="color:' + scoreColor + ';">' +
+      '<span class="moment-card__score' + scoreClass + '">' +
       excitement + "% EXCITEMENT</span>" +
       "</div>" +
-      '<h4 style="margin: 0 0 0.35rem 0; font-size: 1rem;">' +
+      '<h4 class="moment-card__title">' +
       _escapeHtml(ev.description) + "</h4>" +
-      '<p style="font-size: 0.8rem; color: #666; margin: 0 0 0.5rem 0;">' +
+      '<p class="moment-card__meta">' +
       "Source: " + _escapeHtml(ev.source_id) +
       " • " + _formatDuration(ev.duration) +
       " • " + _formatTimecode(ev.start_time) +
@@ -256,20 +432,20 @@
       usesHtml +
       "</div>" +
       "<div>" +
-      '<button class="fog-btn" style="width: 100%; margin-bottom: 0.75rem;" ' +
+      '<button type="button" class="fog-button fog-button--primary moment-card__preview-btn" ' +
       'onclick="FogMediaHub.previewEvent(' + JSON.stringify(ev) + ')">' +
-      "▶ Preview Clip</button>" +
+      "Preview clip</button>" +
       '<div class="moment-card__actions">' +
-      '<button class="fog-btn fog-btn--secondary" ' +
+      '<button type="button" class="fog-button fog-button--secondary" ' +
       'id="' + exportBtnIds["9:16"] + '" ' +
       'onclick="FogMediaHub.triggerExtract(\'' + _escapeHtml(ev.event_id) + "', '9:16')\">Reel 9:16</button>" +
-      '<button class="fog-btn fog-btn--secondary" ' +
+      '<button type="button" class="fog-button fog-button--secondary" ' +
       'id="' + exportBtnIds["1:1"] + '" ' +
       'onclick="FogMediaHub.triggerExtract(\'' + _escapeHtml(ev.event_id) + "', '1:1')\">Square 1:1</button>" +
-      '<button class="fog-btn fog-btn--secondary" ' +
+      '<button type="button" class="fog-button fog-button--secondary" ' +
       'id="' + exportBtnIds["4:5"] + '" ' +
       'onclick="FogMediaHub.triggerExtract(\'' + _escapeHtml(ev.event_id) + "', '4:5')\">Feed 4:5</button>" +
-      '<button class="fog-btn fog-btn--secondary" ' +
+      '<button type="button" class="fog-button fog-button--secondary" ' +
       'id="' + exportBtnIds["16:9"] + '" ' +
       'onclick="FogMediaHub.triggerExtract(\'' + _escapeHtml(ev.event_id) + "', '16:9')\">Master 16:9</button>" +
       "</div>" +
@@ -289,7 +465,7 @@
     var captionText = document.getElementById("caption-text");
     var previewLabel = document.getElementById("preview-label");
 
-    if (captionBox) captionBox.style.display = "block";
+    if (captionBox) captionBox.hidden = false;
     if (captionText) {
       captionText.textContent =
         (ev.suggested_caption || "") +
@@ -318,8 +494,11 @@
       pill.addEventListener("click", function () {
         var ratio = pill.getAttribute("data-ratio-pill");
         setPreviewRatio(ratio);
-        pills.forEach(function (p) { p.classList.remove("active"); });
-        pill.classList.add("active");
+        // aria-pressed is what the markup and the CSS both read; .active was
+        // toggled against nothing and left the buttons unannounced to a
+        // screen reader.
+        pills.forEach(function (p) { p.setAttribute("aria-pressed", "false"); });
+        pill.setAttribute("aria-pressed", "true");
       });
     });
   }
@@ -328,7 +507,10 @@
     currentRatio = ratio;
     var viewport = document.getElementById("video-viewport");
     if (!viewport) return;
-    viewport.className = "video-viewport ratio-" + ratio;
+    // Was: viewport.className = "video-viewport ratio-" + ratio — which wiped
+    // .fog-video-viewport and set two classes that do not exist, so changing
+    // ratio stripped the panel's styling. Keep the base, swap the modifier.
+    viewport.className = "fog-video-viewport fog-video-viewport--" + ratio;
   }
 
   // -------------------------------------------------------------------------
@@ -342,7 +524,7 @@
       " " +
       ((currentEvent.suggested_hashtags || []).join(" "));
     navigator.clipboard.writeText(text.trim()).then(function () {
-      _showToast("📋 Caption copied to clipboard!");
+      _showToast("Caption copied to clipboard!");
     });
   }
 
@@ -380,8 +562,8 @@
     var grid = document.getElementById("moment-grid");
     if (grid) {
       grid.innerHTML =
-        '<p style="color:#006EB6; padding: 2rem 0; grid-column: 1/-1;">' +
-        "⏳ Loading match moments…</p>";
+        '<p class="fog-media-state fog-media-state--loading">' +
+        "Loading match moments…</p>";
     }
   }
 
@@ -389,7 +571,7 @@
     var grid = document.getElementById("moment-grid");
     if (grid) {
       grid.innerHTML =
-        '<p style="color:#C4321F; padding: 2rem 0; grid-column: 1/-1;">⚠️ ' +
+        '<p class="fog-media-state fog-media-state--error">' +
         _escapeHtml(msg) + "</p>";
     }
   }
@@ -399,20 +581,14 @@
     if (!toast) {
       toast = document.createElement("div");
       toast.id = "fog-toast";
-      toast.style.cssText =
-        "position:fixed; bottom:2rem; right:2rem; background:" +
-        (isError ? "#C4321F" : "#006EB6") +
-        "; color:#fff; padding:0.75rem 1.25rem; border-radius:2px; " +
-        "font-family:'Futura PT',Futura,Arial,sans-serif; font-weight:700; " +
-        "font-size:0.875rem; z-index:9999; max-width:320px; box-shadow:0 4px 16px rgba(0,0,0,0.2);";
       document.body.appendChild(toast);
     }
-    toast.style.background = isError ? "#C4321F" : "#006EB6";
+    toast.className = "fog-toast" + (isError ? " fog-toast--error" : "");
     toast.textContent = msg;
-    toast.style.display = "block";
+    toast.hidden = false;
     clearTimeout(toast._timer);
     toast._timer = setTimeout(function () {
-      toast.style.display = "none";
+      toast.hidden = true;
     }, 5000);
   }
 

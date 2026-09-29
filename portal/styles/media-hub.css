@@ -1,91 +1,178 @@
-/* portal/styles/media-hub.css - Compiled from media-hub.less */
-:root {
-  --fog-blue: #006EB6;
-  --fog-light-blue: #24A0F1;
-  --fog-dark-blue: #00243C;
-  --fog-gray: #DCDDDE;
-  --fog-dark-gray: #141718;
-  --fog-white: #FFFFFF;
-  --fog-radius-btn: 2px;
-  --fog-radius-card: 4px;
-}
-
-body {
-  margin: 0;
-  padding: 0;
-  background-color: #F8F9FA;
-  font-family: "Futura PT", Futura, Arial, Helvetica, sans-serif;
-  color: #141718;
-}
-
+/* ==========================================================================
+   SF Fog RFC — Game Day Media Hub Stylesheet
+   Strict adherence to /fog-rugby-design Canon
+   ========================================================================== */
 .fog-media-portal {
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-weight: 400;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: #141718;
+  background-color: #FFFFFF;
+  margin: 0;
   padding: 0 0 4rem 0;
+  -webkit-font-smoothing: antialiased;
 }
-
-.hero-banner {
+.fog-media-portal * {
+  box-sizing: border-box;
+}
+.fog-media-portal .hero-banner {
   background-color: #00243C;
   color: #FFFFFF;
-  padding: 3.5rem 2rem;
+  padding: clamp(2.5rem, 5vw, 4rem) clamp(1.25rem, 4vw, 3rem);
   border-bottom: 3px solid #006EB6;
 }
-
-.hero-banner h1 {
-  font-size: 2.5rem;
+.fog-media-portal .hero-banner__inner {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+.fog-media-portal .hero-banner__eyebrow {
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: #24A0F1;
+  margin-bottom: 0.5rem;
+}
+.fog-media-portal .hero-banner h1 {
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: clamp(2rem, 4vw, 3.25rem);
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  line-height: 1.05;
   margin: 0 0 0.5rem 0;
+  color: #FFFFFF;
 }
-
-.hero-banner p {
+.fog-media-portal .hero-banner p {
   color: #DCDDDE;
-  margin: 0;
   font-size: 1.1rem;
+  margin: 0;
+  max-width: 720px;
 }
-
-.fog-subnav {
+.fog-media-portal .fog-subnav {
   display: flex;
   background: #FFFFFF;
   border-bottom: 1px solid #DCDDDE;
-  padding: 0 2rem;
+  padding: 0 clamp(1.25rem, 4vw, 3rem);
   gap: 1.5rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  overflow-x: auto;
 }
-
-.fog-subnav__link {
+.fog-media-portal .fog-subnav__link {
   display: inline-block;
-  padding: 1rem 0.5rem;
+  padding: 1rem 0.25rem;
   text-decoration: none;
   color: #141718;
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
   border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  transition: color 0.15s ease, border-color 0.15s ease;
 }
-
-.fog-subnav__link--active {
+.fog-media-portal .fog-subnav__link:hover {
+  color: #006EB6;
+}
+.fog-media-portal .fog-subnav__link--active {
   color: #006EB6;
   border-bottom-color: #006EB6;
 }
-
-.portal-container {
-  max-width: 1440px;
+.fog-media-portal .portal-container {
+  max-width: 1200px;
   margin: 2rem auto;
-  padding: 0 2rem;
+  padding: 0 clamp(1.25rem, 4vw, 3rem);
   display: grid;
-  grid-template-columns: 1fr 420px;
+  grid-template-columns: minmax(0, 1fr) 380px;
   gap: 2rem;
+  align-items: start;
 }
-
 @media (max-width: 960px) {
-  .portal-container {
+  .fog-media-portal .portal-container {
     grid-template-columns: 1fr;
   }
 }
-
-.moment-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 1.5rem;
+.fog-media-portal .fog-analysis-bar {
+  background: #FFFFFF;
+  border: 1px solid #DCDDDE;
+  border-radius: 4px;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
 }
-
-.moment-card {
+.fog-media-portal .fog-analysis-bar__inner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+.fog-media-portal .fog-analysis-bar__title {
+  width: 100%;
+  margin: 0 0 0.5rem 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #00243C;
+}
+.fog-media-portal .fog-analysis-bar__status {
+  margin: 0.75rem 0 0 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #006EB6;
+}
+.fog-media-portal .fog-analysis-bar__status--error {
+  color: #C4321F;
+}
+.fog-media-portal .fog-input {
+  flex: 1 1 200px;
+  height: 40px;
+  padding: 0 0.75rem;
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: 0.875rem;
+  color: #141718;
+  background: #FFFFFF;
+  border: 1px solid #DCDDDE;
+  border-radius: 2px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.fog-media-portal .fog-input:focus {
+  border-color: #006EB6;
+}
+.fog-media-portal .fog-input::placeholder {
+  color: #DCDDDE;
+}
+.fog-media-portal .fog-section-heading {
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: clamp(1.4rem, 2.2vw, 1.85rem);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1.05;
+  color: #006EB6;
+  margin: 0 0 0.25rem 0;
+}
+.fog-media-portal .fog-media-meta {
+  font-size: 0.85rem;
+  color: #141718;
+  margin: 0 0 1.25rem 0;
+  display: block;
+}
+.fog-media-portal .moment-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 1.5rem;
+  gap: 1rem;
+}
+.fog-media-portal .moment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1.25rem;
+}
+.fog-media-portal .moment-card {
   background: #FFFFFF;
   border: 1px solid #DCDDDE;
   border-radius: 4px;
@@ -93,123 +180,377 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-
-.moment-card__header {
+.fog-media-portal .moment-card:hover {
+  border-color: #006EB6;
+}
+.fog-media-portal .moment-card--selected {
+  border-color: #006EB6;
+  box-shadow: 0 0 0 2px #006EB6;
+}
+.fog-media-portal .moment-card__header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.75rem;
 }
-
-.moment-card__badge {
+.fog-media-portal .moment-card__badge {
   background: #006EB6;
   color: #FFFFFF;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
+  padding: 3px 6px;
+  font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
+  letter-spacing: 0.05em;
   border-radius: 2px;
 }
-
-.moment-card__score {
-  font-size: 0.85rem;
+.fog-media-portal .moment-card__score {
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: #00243C;
-  font-weight: bold;
 }
-
-.moment-card__pairings {
-  background: #F0F4F8;
+.fog-media-portal .moment-card__score--high {
+  color: #157A38;
+}
+.fog-media-portal .moment-card__score--mid {
+  color: #006EB6;
+}
+.fog-media-portal .moment-card__thumb {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  display: block;
+  background: #00243C;
+  border-radius: 0;
+  margin-bottom: 0.75rem;
+}
+.fog-media-portal .moment-card__title {
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: 1.05rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1.15;
+  color: #00243C;
+  margin: 0 0 0.35rem 0;
+}
+.fog-media-portal .moment-card__meta {
+  font-size: 0.8rem;
+  color: #141718;
+  margin: 0 0 0.75rem 0;
+}
+.fog-media-portal .moment-card__pairings {
+  background: #FFFFFF;
+  border: 1px solid #DCDDDE;
   border-left: 3px solid #24A0F1;
   padding: 0.5rem 0.75rem;
   font-size: 0.8rem;
   margin: 0.75rem 0;
   border-radius: 0 2px 2px 0;
-  line-height: 1.35;
 }
-
-.moment-card__actions {
+.fog-media-portal .moment-card__pairings strong {
+  color: #00243C;
+}
+.fog-media-portal .moment-card__uses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.5rem 0 1rem 0;
+}
+.fog-media-portal .moment-card .use-tag {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #00243C;
+  background: #FFFFFF;
+  border: 1px solid #DCDDDE;
+  border-radius: 2px;
+}
+.fog-media-portal .moment-card__actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.5rem;
-  margin-top: 1rem;
+  margin-top: 0.75rem;
 }
-
-.fog-btn {
+.fog-media-portal .moment-card__actions--single {
+  grid-template-columns: 1fr;
+}
+.fog-media-portal .moment-card__actions .fog-btn {
+  width: 100%;
+}
+.fog-media-portal .fog-button,
+.fog-media-portal .fog-btn {
+  display: inline-block;
   border-radius: 2px;
-  border: 1px solid #006EB6;
+  border: 2px solid #006EB6;
   background: #006EB6;
   color: #FFFFFF;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8rem;
+  padding: 8px 16px;
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
+  letter-spacing: 0.05em;
   cursor: pointer;
   text-align: center;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  text-decoration: none;
+  line-height: 1.2;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
-
-.fog-btn:hover {
+.fog-media-portal .fog-button:hover,
+.fog-media-portal .fog-btn:hover {
+  background: #24A0F1;
+  border-color: #24A0F1;
+  color: #FFFFFF;
+}
+.fog-media-portal .fog-button--primary,
+.fog-media-portal .fog-btn--primary {
+  background: #006EB6;
+  border-color: #006EB6;
+  color: #FFFFFF;
+}
+.fog-media-portal .fog-button--primary:hover,
+.fog-media-portal .fog-btn--primary:hover {
   background: #24A0F1;
   border-color: #24A0F1;
 }
-
-.fog-btn--secondary {
+.fog-media-portal .fog-button--secondary,
+.fog-media-portal .fog-btn--secondary {
   background: transparent;
+  border: 2px solid #006EB6;
   color: #006EB6;
 }
-
-.fog-btn--secondary:hover {
-  background: #EBF5FB;
+.fog-media-portal .fog-button--secondary:hover,
+.fog-media-portal .fog-btn--secondary:hover {
+  background: #006EB6;
+  border-color: #006EB6;
+  color: #FFFFFF;
 }
-
-.preview-panel {
+.fog-media-portal .fog-button--secondary.active,
+.fog-media-portal .fog-btn--secondary.active {
+  background: #006EB6;
+  color: #FFFFFF;
+}
+.fog-media-portal .fog-button--confirmed,
+.fog-media-portal .fog-btn--confirmed,
+.fog-media-portal .fog-button--success,
+.fog-media-portal .fog-btn--success {
+  background: #157A38;
+  border-color: #157A38;
+  color: #FFFFFF;
+}
+.fog-media-portal .fog-button:disabled,
+.fog-media-portal .fog-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.fog-media-portal .fog-ratio-btn {
+  border-radius: 2px;
+  border: 2px solid #006EB6;
+  background: transparent;
+  color: #006EB6;
+  padding: 6px 12px;
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+.fog-media-portal .fog-ratio-btn[aria-pressed="true"],
+.fog-media-portal .fog-ratio-btn.active {
+  background: #006EB6;
+  color: #FFFFFF;
+}
+.fog-media-portal .fog-ratio-btn:hover:not([aria-pressed="true"]) {
+  background: #006EB6;
+  color: #FFFFFF;
+}
+.fog-media-portal .preview-panel {
   background: #FFFFFF;
   border: 1px solid #DCDDDE;
   border-radius: 4px;
   padding: 1.5rem;
-  height: fit-content;
   position: sticky;
   top: 2rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
-
-.video-viewport {
+.fog-media-portal .preview-panel__title {
+  margin: 0 0 1rem 0;
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #00243C;
+}
+.fog-media-portal .preview-panel .format-pills {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.fog-media-portal .preview-panel .format-pills .fog-btn {
+  flex: 1 1 auto;
+  padding: 6px 10px;
+  font-size: 0.7rem;
+}
+.fog-media-portal .preview-panel .fog-video-viewport,
+.fog-media-portal .preview-panel .video-viewport {
   background: #00243C;
   border-radius: 2px;
   display: flex;
   justify-content: center;
   align-items: center;
   overflow: hidden;
-  margin: 1rem 0;
-  min-height: 240px;
-  transition: aspect-ratio 0.2s ease;
+  margin: 1rem 0 0.5rem 0;
+  min-height: 220px;
 }
-
-.video-viewport.ratio-9x16 {
-  aspect-ratio: 9 / 16;
-  max-height: 480px;
-  margin: 0 auto 1rem auto;
-}
-
-.video-viewport.ratio-1x1 {
-  aspect-ratio: 1 / 1;
-}
-
-.video-viewport.ratio-4x5 {
-  aspect-ratio: 4 / 5;
-  max-height: 440px;
-  margin: 0 auto 1rem auto;
-}
-
-.video-viewport.ratio-16x9 {
+.fog-media-portal .preview-panel .fog-video-viewport.ratio-16x9,
+.fog-media-portal .preview-panel .video-viewport.ratio-16x9,
+.fog-media-portal .preview-panel .fog-video-viewport--16x9,
+.fog-media-portal .preview-panel .video-viewport--16x9 {
   aspect-ratio: 16 / 9;
 }
-
-.format-pills {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
-  flex-wrap: wrap;
+.fog-media-portal .preview-panel .fog-video-viewport.ratio-9x16,
+.fog-media-portal .preview-panel .video-viewport.ratio-9x16,
+.fog-media-portal .preview-panel .fog-video-viewport--9x16,
+.fog-media-portal .preview-panel .video-viewport--9x16 {
+  aspect-ratio: 9 / 16;
+  max-height: 440px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.fog-media-portal .preview-panel .fog-video-viewport.ratio-1x1,
+.fog-media-portal .preview-panel .video-viewport.ratio-1x1,
+.fog-media-portal .preview-panel .fog-video-viewport--1x1,
+.fog-media-portal .preview-panel .video-viewport--1x1 {
+  aspect-ratio: 1 / 1;
+}
+.fog-media-portal .preview-panel .fog-video-viewport.ratio-4x5,
+.fog-media-portal .preview-panel .video-viewport.ratio-4x5,
+.fog-media-portal .preview-panel .fog-video-viewport--4x5,
+.fog-media-portal .preview-panel .video-viewport--4x5 {
+  aspect-ratio: 4 / 5;
+  max-height: 400px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.fog-media-portal .preview-panel .fog-video-viewport .video-placeholder,
+.fog-media-portal .preview-panel .video-viewport .video-placeholder,
+.fog-media-portal .preview-panel .fog-video-viewport .fog-video-placeholder,
+.fog-media-portal .preview-panel .video-viewport .fog-video-placeholder {
+  color: #DCDDDE;
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 1.5rem;
+}
+.fog-media-portal .preview-panel .fog-video-viewport video,
+.fog-media-portal .preview-panel .video-viewport video {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+}
+.fog-media-portal .preview-panel .preview-label {
+  font-size: 0.8rem;
+  color: #141718;
+  margin: 0.5rem 0;
+  min-height: 1.2em;
+}
+.fog-media-portal .preview-panel .caption-box {
+  border: 1px solid #DCDDDE;
+  border-radius: 4px;
+  padding: 1rem;
+  margin-top: 1rem;
+  background: #FFFFFF;
+}
+.fog-media-portal .preview-panel .caption-box h4 {
+  margin: 0 0 0.5rem 0;
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #00243C;
+}
+.fog-media-portal .preview-panel .caption-box p {
+  font-size: 0.85rem;
+  color: #141718;
+  margin: 0 0 0.75rem 0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.fog-media-portal .preview-panel .preview-stats {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #DCDDDE;
+}
+.fog-media-portal .preview-panel .preview-stats h4 {
+  margin: 0 0 0.75rem 0;
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #00243C;
+}
+.fog-media-portal .preview-panel .preview-stats .stats-list {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+  margin: 0;
+}
+.fog-media-portal .preview-panel .preview-stats .stats-list div dt {
+  font-size: 0.75rem;
+  color: #141718;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.fog-media-portal .preview-panel .preview-stats .stats-list div dd {
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #006EB6;
+  margin: 0;
+}
+.fog-media-portal .fog-veo-section {
+  margin-bottom: 2rem;
+}
+.fog-media-portal .fog-media-state {
+  grid-column: 1 / -1;
+  padding: 2rem 0;
+  color: #141718;
+  font-size: 0.95rem;
+}
+.fog-media-portal .fog-media-state--loading {
+  color: #006EB6;
+}
+.fog-media-portal .fog-media-state--error {
+  color: #C4321F;
+}
+.fog-media-portal .fog-toast {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  background: #006EB6;
+  color: #FFFFFF;
+  padding: 0.75rem 1.25rem;
+  border-radius: 2px;
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700;
+  font-size: 0.875rem;
+  z-index: 9999;
+  max-width: 320px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+.fog-media-portal .fog-toast--error {
+  background: #C4321F;
 }

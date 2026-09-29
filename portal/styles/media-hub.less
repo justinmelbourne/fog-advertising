@@ -1,52 +1,114 @@
-/* portal/styles/media-hub.less */
-@fog-blue: #006EB6;
-@fog-light-blue: #24A0F1;
-@fog-dark-blue: #00243C;
-@fog-gray: #DCDDDE;
-@fog-dark-gray: #141718;
-@fog-white: #FFFFFF;
-@fog-radius-btn: 2px;
-@fog-radius-card: 4px;
+/* ==========================================================================
+   SF Fog RFC — Game Day Media Hub Stylesheet
+   Strict adherence to /fog-rugby-design Canon
+   ========================================================================== */
 
+// --- The Exact Six-Color System --------------------------------------------
+@fog-blue:       #006EB6; // Primary blue: headlines-2, links, primary buttons
+@fog-light-blue: #24A0F1; // Accent sky blue: hovers, eyebrows on dark, focus
+@fog-dark-blue:  #00243C; // Pitch navy: dark hero, footers, default h1
+@fog-gray:       #DCDDDE; // Neutral gray: card borders, stat table dividing lines
+@fog-dark-gray:  #141718; // Body copy text (near-black, never pure black for text)
+@fog-black:      #000000;
+@fog-white:      #FFFFFF;
+
+// Semantic alert tokens
+@fog-green:      #157A38; // High excitement / success
+@fog-red:        #C4321F; // Low excitement / error / loss
+
+// Geometry tokens
+@fog-radius-btn:  2px;    // Strict 2px radius (Zero-Pill Law)
+@fog-radius-card: 4px;    // Flat, editorial near-square cards
+
+// Typography tokens
+@fog-font-display: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+@fog-font-body:    "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+
+// Base reset within portal container
 .fog-media-portal {
-  font-family: "Futura PT", Futura, Arial, Helvetica, sans-serif;
+  font-family: @fog-font-body;
+  font-weight: 400;
+  font-size: 1rem;
+  line-height: 1.6;
   color: @fog-dark-gray;
-  background-color: #F8F9FA;
+  background-color: @fog-white;
+  margin: 0;
   padding: 0 0 4rem 0;
+  -webkit-font-smoothing: antialiased;
 
+  * {
+    box-sizing: border-box;
+  }
+
+  // --- Signature Hero: Flat Fog Dark panel ---------------------------------
   .hero-banner {
     background-color: @fog-dark-blue;
     color: @fog-white;
-    padding: 3.5rem 2rem;
+    padding: clamp(2.5rem, 5vw, 4rem) clamp(1.25rem, 4vw, 3rem);
     border-bottom: 3px solid @fog-blue;
 
+    &__inner {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    &__eyebrow {
+      display: inline-block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: @fog-light-blue; // Contrast Law: Light Blue on dark (5.60:1 AA)
+      margin-bottom: 0.5rem;
+    }
+
     h1 {
-      font-size: 2.5rem;
+      font-family: @fog-font-display;
+      font-size: clamp(2rem, 4vw, 3.25rem);
+      font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.05em;
+      line-height: 1.05;
       margin: 0 0 0.5rem 0;
+      color: @fog-white;
     }
+
     p {
       color: @fog-gray;
-      margin: 0;
       font-size: 1.1rem;
+      margin: 0;
+      max-width: 720px;
     }
   }
 
+  // --- Mandatory Secondary Subnav -----------------------------------------
   .fog-subnav {
     display: flex;
     background: @fog-white;
     border-bottom: 1px solid @fog-gray;
-    padding: 0 2rem;
+    padding: 0 clamp(1.25rem, 4vw, 3rem);
     gap: 1.5rem;
+    max-width: 1200px;
+    margin: 0 auto;
+    overflow-x: auto;
 
     &__link {
       display: inline-block;
-      padding: 1rem 0.5rem;
+      padding: 1rem 0.25rem;
       text-decoration: none;
       color: @fog-dark-gray;
+      font-family: @fog-font-display;
+      font-size: 13px;
       font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
       border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      transition: color 0.15s ease, border-color 0.15s ease;
+
+      &:hover {
+        color: @fog-blue;
+      }
 
       &--active {
         color: @fog-blue;
@@ -55,19 +117,111 @@
     }
   }
 
+  // --- Main Layout Container (Max 1200px) -----------------------------------
   .portal-container {
-    max-width: 1440px;
+    max-width: 1200px;
     margin: 2rem auto;
-    padding: 0 2rem;
+    padding: 0 clamp(1.25rem, 4vw, 3rem);
     display: grid;
-    grid-template-columns: 1fr 420px;
+    grid-template-columns: minmax(0, 1fr) 380px;
     gap: 2rem;
+    align-items: start;
+
+    @media (max-width: 960px) {
+      grid-template-columns: 1fr;
+    }
   }
 
+  // --- Analysis & Ingest Bar ----------------------------------------------
+  .fog-analysis-bar {
+    background: @fog-white;
+    border: 1px solid @fog-gray;
+    border-radius: @fog-radius-card;
+    padding: 1.25rem;
+    margin-bottom: 1.5rem;
+
+    &__inner {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+    }
+
+    &__title {
+      width: 100%;
+      margin: 0 0 0.5rem 0;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: @fog-dark-blue;
+    }
+
+    &__status {
+      margin: 0.75rem 0 0 0;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: @fog-blue;
+
+      &--error {
+        color: @fog-red;
+      }
+    }
+  }
+
+  // --- Form Controls (Strict 2px radius) -----------------------------------
+  .fog-input {
+    flex: 1 1 200px;
+    height: 40px;
+    padding: 0 0.75rem;
+    font-family: @fog-font-body;
+    font-size: 0.875rem;
+    color: @fog-dark-gray;
+    background: @fog-white;
+    border: 1px solid @fog-gray;
+    border-radius: @fog-radius-btn;
+    outline: none;
+    transition: border-color 0.15s ease;
+
+    &:focus {
+      border-color: @fog-blue;
+    }
+
+    &::placeholder {
+      color: @fog-gray;
+    }
+  }
+
+  // --- Section Headings ----------------------------------------------------
+  .fog-section-heading {
+    font-family: @fog-font-display;
+    font-size: clamp(1.4rem, 2.2vw, 1.85rem);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    line-height: 1.05;
+    color: @fog-blue; // H2 color is Fog Blue
+    margin: 0 0 0.25rem 0;
+  }
+
+  .fog-media-meta {
+    font-size: 0.85rem;
+    color: @fog-dark-gray;
+    margin: 0 0 1.25rem 0;
+    display: block;
+  }
+
+  .moment-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1.5rem;
+    gap: 1rem;
+  }
+
+  // --- Card Grid & Cards (Natural Intrinsic Height) -------------------------
   .moment-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 1.5rem;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1.25rem;
   }
 
   .moment-card {
@@ -78,6 +232,16 @@
     display: flex;
     flex-direction: column;
     justify-content: space-between;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+    &:hover {
+      border-color: @fog-blue;
+    }
+
+    &--selected {
+      border-color: @fog-blue;
+      box-shadow: 0 0 0 2px @fog-blue;
+    }
 
     &__header {
       display: flex;
@@ -89,73 +253,228 @@
     &__badge {
       background: @fog-blue;
       color: @fog-white;
-      padding: 0.25rem 0.5rem;
-      font-size: 0.75rem;
+      padding: 3px 6px;
+      font-size: 0.7rem;
       font-weight: 700;
       text-transform: uppercase;
+      letter-spacing: 0.05em;
       border-radius: @fog-radius-btn;
     }
 
     &__score {
-      font-size: 0.85rem;
+      font-family: @fog-font-display;
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
       color: @fog-dark-blue;
-      font-weight: bold;
+
+      &--high { color: @fog-green; }
+      &--mid  { color: @fog-blue; }
+    }
+
+    &__thumb {
+      width: 100%;
+      aspect-ratio: 16 / 9; // Strictly reserved for media thumbnails
+      object-fit: cover;
+      display: block;
+      background: @fog-dark-blue;
+      border-radius: 0;
+      margin-bottom: 0.75rem;
+    }
+
+    &__title {
+      font-family: @fog-font-display;
+      font-size: 1.05rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      line-height: 1.15;
+      color: @fog-dark-blue;
+      margin: 0 0 0.35rem 0;
+    }
+
+    &__meta {
+      font-size: 0.8rem;
+      color: @fog-dark-gray;
+      margin: 0 0 0.75rem 0;
     }
 
     &__pairings {
-      background: #F0F4F8;
+      background: @fog-white;
+      border: 1px solid @fog-gray;
       border-left: 3px solid @fog-light-blue;
       padding: 0.5rem 0.75rem;
       font-size: 0.8rem;
       margin: 0.75rem 0;
       border-radius: 0 @fog-radius-btn @fog-radius-btn 0;
+
+      strong {
+        color: @fog-dark-blue;
+      }
+    }
+
+    &__uses {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin: 0.5rem 0 1rem 0;
+    }
+
+    .use-tag {
+      display: inline-block;
+      padding: 2px 6px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: @fog-dark-blue;
+      background: @fog-white;
+      border: 1px solid @fog-gray;
+      border-radius: @fog-radius-btn;
     }
 
     &__actions {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 0.5rem;
-      margin-top: 1rem;
-    }
-  }
+      margin-top: 0.75rem;
 
-  .fog-btn {
-    border-radius: @fog-radius-btn;
-    border: 1px solid @fog-blue;
-    background: @fog-blue;
-    color: @fog-white;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.8rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    cursor: pointer;
-    text-align: center;
-    transition: background 0.15s ease, border-color 0.15s ease;
+      &--single {
+        grid-template-columns: 1fr;
+      }
 
-    &:hover {
-      background: @fog-light-blue;
-      border-color: @fog-light-blue;
-    }
-
-    &--secondary {
-      background: transparent;
-      color: @fog-blue;
-
-      &:hover {
-        background: #EBF5FB;
+      .fog-btn {
+        width: 100%;
       }
     }
   }
 
+  // --- Button Specs (Zero-Pill Law: strictly 2px radius) -------------------
+  .fog-button,
+  .fog-btn {
+    display: inline-block;
+    border-radius: @fog-radius-btn;
+    border: 2px solid @fog-blue;
+    background: @fog-blue;
+    color: @fog-white;
+    padding: 8px 16px;
+    font-family: @fog-font-display;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    text-align: center;
+    text-decoration: none;
+    line-height: 1.2;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+
+    &:hover {
+      background: @fog-light-blue;
+      border-color: @fog-light-blue;
+      color: @fog-white;
+    }
+
+    &--primary {
+      background: @fog-blue;
+      border-color: @fog-blue;
+      color: @fog-white;
+
+      &:hover {
+        background: @fog-light-blue;
+        border-color: @fog-light-blue;
+      }
+    }
+
+    &--secondary {
+      background: transparent;
+      border: 2px solid @fog-blue;
+      color: @fog-blue;
+
+      &:hover {
+        background: @fog-blue;
+        border-color: @fog-blue;
+        color: @fog-white;
+      }
+
+      &.active {
+        background: @fog-blue;
+        color: @fog-white;
+      }
+    }
+
+    &--confirmed,
+    &--success {
+      background: @fog-green;
+      border-color: @fog-green;
+      color: @fog-white;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  .fog-ratio-btn {
+    border-radius: @fog-radius-btn;
+    border: 2px solid @fog-blue;
+    background: transparent;
+    color: @fog-blue;
+    padding: 6px 12px;
+    font-family: @fog-font-display;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+
+    &[aria-pressed="true"],
+    &.active {
+      background: @fog-blue;
+      color: @fog-white;
+    }
+
+    &:hover:not([aria-pressed="true"]) {
+      background: @fog-blue;
+      color: @fog-white;
+    }
+  }
+
+  // --- Right: Preview Panel ------------------------------------------------
   .preview-panel {
     background: @fog-white;
     border: 1px solid @fog-gray;
     border-radius: @fog-radius-card;
     padding: 1.5rem;
-    height: fit-content;
     position: sticky;
     top: 2rem;
 
+    &__title {
+      margin: 0 0 1rem 0;
+      font-family: @fog-font-display;
+      font-size: 0.95rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: @fog-dark-blue;
+    }
+
+    .format-pills {
+      display: flex;
+      gap: 0.4rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+
+      .fog-btn {
+        flex: 1 1 auto;
+        padding: 6px 10px;
+        font-size: 0.7rem;
+      }
+    }
+
+    .fog-video-viewport,
     .video-viewport {
       background: @fog-dark-blue;
       border-radius: @fog-radius-btn;
@@ -163,32 +482,157 @@
       justify-content: center;
       align-items: center;
       overflow: hidden;
-      margin: 1rem 0;
-      min-height: 240px;
+      margin: 1rem 0 0.5rem 0;
+      min-height: 220px;
 
-      &.ratio-9x16 {
+      &.ratio-16x9,
+      &--16x9 { aspect-ratio: 16 / 9; }
+      &.ratio-9x16,
+      &--9x16 {
         aspect-ratio: 9 / 16;
-        max-height: 480px;
-        margin: 0 auto 1rem auto;
-      }
-      &.ratio-1x1 {
-        aspect-ratio: 1 / 1;
-      }
-      &.ratio-4x5 {
-        aspect-ratio: 4 / 5;
         max-height: 440px;
-        margin: 0 auto 1rem auto;
+        margin-left: auto;
+        margin-right: auto;
       }
-      &.ratio-16x9 {
-        aspect-ratio: 16 / 9;
+      &.ratio-1x1,
+      &--1x1  { aspect-ratio: 1 / 1; }
+      &.ratio-4x5,
+      &--4x5  {
+        aspect-ratio: 4 / 5;
+        max-height: 400px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+
+      .video-placeholder,
+      .fog-video-placeholder {
+        color: @fog-gray;
+        font-size: 0.85rem;
+        text-align: center;
+        padding: 1.5rem;
+      }
+
+      video {
+        width: 100%;
+        height: 100%;
+        max-width: 100%;
+        max-height: 100%;
+        display: block;
       }
     }
 
-    .format-pills {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 1rem;
-      flex-wrap: wrap;
+    .preview-label {
+      font-size: 0.8rem;
+      color: @fog-dark-gray;
+      margin: 0.5rem 0;
+      min-height: 1.2em;
+    }
+
+    .caption-box {
+      border: 1px solid @fog-gray;
+      border-radius: @fog-radius-card;
+      padding: 1rem;
+      margin-top: 1rem;
+      background: @fog-white;
+
+      h4 {
+        margin: 0 0 0.5rem 0;
+        font-family: @fog-font-display;
+        font-size: 0.8rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: @fog-dark-blue;
+      }
+
+      p {
+        font-size: 0.85rem;
+        color: @fog-dark-gray;
+        margin: 0 0 0.75rem 0;
+        line-height: 1.5;
+        white-space: pre-wrap;
+      }
+    }
+
+    .preview-stats {
+      margin-top: 1.25rem;
+      padding-top: 1.25rem;
+      border-top: 1px solid @fog-gray;
+
+      h4 {
+        margin: 0 0 0.75rem 0;
+        font-family: @fog-font-display;
+        font-size: 0.8rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: @fog-dark-blue;
+      }
+
+      .stats-list {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.75rem;
+        margin: 0;
+
+        div {
+          dt {
+            font-size: 0.75rem;
+            color: @fog-dark-gray;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+          }
+          dd {
+            font-family: @fog-font-display;
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: @fog-blue;
+            margin: 0;
+          }
+        }
+      }
+    }
+  }
+
+  // --- Veo Import Section --------------------------------------------------
+  .fog-veo-section {
+    margin-bottom: 2rem;
+  }
+
+  // --- Media State Messages ------------------------------------------------
+  .fog-media-state {
+    grid-column: 1 / -1;
+    padding: 2rem 0;
+    color: @fog-dark-gray;
+    font-size: 0.95rem;
+
+    &--loading {
+      color: @fog-blue;
+    }
+
+    &--error {
+      color: @fog-red;
+    }
+  }
+
+  // --- Toasts --------------------------------------------------------------
+  .fog-toast {
+    position: fixed;
+    bottom: 2rem;
+    right: 2rem;
+    background: @fog-blue;
+    color: @fog-white;
+    padding: 0.75rem 1.25rem;
+    border-radius: @fog-radius-btn;
+    font-family: @fog-font-display;
+    font-weight: 700;
+    font-size: 0.875rem;
+    z-index: 9999;
+    max-width: 320px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+
+    &--error {
+      background: @fog-red;
     }
   }
 }
