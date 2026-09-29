@@ -164,12 +164,17 @@ class DriveClient:
         return file["id"]
 
     def stream_url_to_folder(
-        self, download_url: str, filename: str, folder_id: Optional[str] = None
+        self,
+        download_url: str,
+        filename: str,
+        folder_id: Optional[str] = None,
+        progress_callback: Optional[Any] = None,
     ) -> str:
         """
         Streams a video file directly from a remote CDN URL into Google Drive
         using Google Drive Resumable Upload protocol.
         Requires zero local disk storage and minimal (10MB buffer) memory usage.
+        Optionally reports uploaded bytes and total bytes via progress_callback(uploaded, total).
         """
         target_folder = folder_id or self._ingest_folder_id
 
@@ -177,6 +182,12 @@ class DriveClient:
         head_resp = requests.head(download_url, timeout=30, allow_redirects=True)
         head_resp.raise_for_status()
         total_size = int(head_resp.headers.get("content-length", 0))
+
+        if progress_callback:
+            try:
+                progress_callback(0, total_size)
+            except Exception as e:
+                logger.debug("Progress callback error: %s", e)
 
         # 2. Get fresh Google OAuth token
         if not self._creds.valid:
@@ -233,6 +244,11 @@ class DriveClient:
                 )
                 if upload_resp.status_code in (200, 201):
                     file_id = upload_resp.json().get("id", "")
+                    if progress_callback:
+                        try:
+                            progress_callback(total_size, total_size)
+                        except Exception:
+                            pass
                     break
                 elif upload_resp.status_code == 308:
                     pass
@@ -240,6 +256,11 @@ class DriveClient:
                     upload_resp.raise_for_status()
 
                 start_byte = end_byte + 1
+                if progress_callback:
+                    try:
+                        progress_callback(start_byte, total_size)
+                    except Exception as e:
+                        logger.debug("Progress callback error: %s", e)
 
         logger.info("Successfully streamed %s directly to Drive: %s", filename, file_id)
         return file_id

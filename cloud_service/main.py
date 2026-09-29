@@ -30,9 +30,14 @@ Environment Variables (set via Secret Manager in Cloud Run):
 import os
 import uuid
 import logging
+import threading
+import time
 from typing import Any, Optional
 
 from flask import Flask, jsonify, request, Response
+
+# In-memory job registry for real-time progress tracking
+JOBS: dict[str, dict[str, Any]] = {}
 
 # Local engine imports (bundled in same container image)
 from engine.models import Manifest, VideoSource, Event
@@ -147,47 +152,81 @@ def get_veo_match(match_id_or_slug: str) -> Response:
 
 # ---------------------------------------------------------------------------
 # POST /veo/ingest
-# Direct Cloud-to-Cloud ingestion:
-# 1. Resolves match MP4 URL and pre-tagged events from Veo
-# 2. Streams the 1080p MP4 directly from Veo CDN to Google Drive (zero local bandwidth)
-# 3. Builds and writes the initial rugby manifest with pre-tagged AI events
-# ---------------------------------------------------------------------------
-
-@app.route("/veo/ingest", methods=["POST"])
-def ingest_veo_match() -> Response:
-    data = request.get_json(silent=True) or {}
-    match_input = data.get("match") or data.get("match_id") or data.get("url")
-    custom_title = data.get("title")
-
-    if not match_input:
-        return jsonify({"error": "match (URL, slug, or ID) is required"}), 400
-
-    token = os.environ.get("VEO_API_TOKEN", "")
-    client = VeoApiClient(token=token)
-    slug = client.parse_slug_or_id(match_input)
-
-    logger.info("Starting direct Veo ingest for match: %s", slug)
-    details = client.resolve_match_details(slug)
-    if not details or not details.get("video_url"):
-        return jsonify({"error": f"Could not resolve video URL for match: {slug}"}), 404
-
-    video_url = details["video_url"]
-    filename = f"{slug}_1080p.mp4"
-    match_title = custom_title or f"SF Fog RFC — {slug.replace('-', ' ').title()}"
-
-    drive = DriveClient()
-    job_id = str(uuid.uuid4())
-
+def _process_veo_ingest_job(job_id: str, slug: str, match_title: str, client: VeoApiClient) -> None:
+    job = JOBS.get(job_id)
+    if not job:
+        return
+    start_time = time.time()
     try:
-        # Stream video from Veo CDN directly into Google Drive
+        job["stage"] = "resolving"
+        job["stage_description"] = "Connecting to Veo API & resolving match video stream..."
+        job["progress_pct"] = 5
+        job["updated_at"] = time.time()
+
+        details = client.resolve_match_details(slug)
+        if not details or not details.get("video_url"):
+            job["stage"] = "error"
+            job["error"] = f"Could not resolve video URL for match: {slug}"
+            job["updated_at"] = time.time()
+            return
+
+        video_url = details["video_url"]
+        filename = f"{slug}_1080p.mp4"
+
+        # Parse pre-tagged highlights early so the UI sees detected rugby events immediately
+        events = parse_veo_highlights(details.get("highlights", []), source_id="veo_main")
+        enriched_events = generate_clip_pairings(events)
+        job["events_count"] = len(enriched_events)
+        job["stage"] = "streaming"
+        job["stage_description"] = f"Streaming 1080p video from Veo CDN to Google Drive ({len(enriched_events)} events detected)..."
+        job["progress_pct"] = 10
+        job["updated_at"] = time.time()
+
+        drive = DriveClient()
+        last_time = time.time()
+        last_bytes = 0
+
+        def on_stream_progress(bytes_uploaded: int, total_bytes: int) -> None:
+            nonlocal last_time, last_bytes
+            now = time.time()
+            elapsed = now - last_time
+            if elapsed >= 0.5 or bytes_uploaded == total_bytes:
+                delta_bytes = bytes_uploaded - last_bytes if bytes_uploaded > last_bytes else 0
+                speed_bps = delta_bytes / max(elapsed, 0.001)
+                speed_mbps = round((speed_bps * 8) / (1024 * 1024), 1)
+
+                pct_stream = (bytes_uploaded / total_bytes) if total_bytes > 0 else 0
+                overall_pct = min(90, int(10 + pct_stream * 80))
+
+                mb_uploaded = round(bytes_uploaded / (1024 * 1024), 1)
+                mb_total = round(total_bytes / (1024 * 1024), 1)
+                eta_s = int((total_bytes - bytes_uploaded) / max(speed_bps, 1)) if total_bytes > bytes_uploaded else 0
+
+                job["progress_pct"] = overall_pct
+                job["bytes_uploaded"] = bytes_uploaded
+                job["total_bytes"] = total_bytes
+                job["mb_uploaded"] = mb_uploaded
+                job["mb_total"] = mb_total
+                job["speed_mbps"] = speed_mbps
+                job["eta_seconds"] = eta_s
+                job["stage_description"] = (
+                    f"Streaming to Google Drive: {mb_uploaded} MB / {mb_total} MB "
+                    f"({int(pct_stream * 100)}%) • {speed_mbps} Mbps"
+                )
+                job["updated_at"] = now
+                last_time = now
+                last_bytes = bytes_uploaded
+
         drive_file_id = drive.stream_url_to_folder(
             download_url=video_url,
             filename=filename,
+            progress_callback=on_stream_progress,
         )
 
-        # Parse pre-tagged Veo rugby highlights into standard Event models
-        events = parse_veo_highlights(details.get("highlights", []), source_id="veo_main")
-        enriched_events = generate_clip_pairings(events)
+        job["stage"] = "analyzing"
+        job["progress_pct"] = 92
+        job["stage_description"] = "Assembling match manifest and saving to Google Drive..."
+        job["updated_at"] = time.time()
 
         # Construct and save manifest to Google Drive
         manifest = Manifest(
@@ -209,18 +248,92 @@ def ingest_veo_match() -> Response:
         )
         drive.write_manifest(manifest)
 
-        return jsonify({
-            "status": "ingested",
-            "job_id": job_id,
-            "match_id": slug,
-            "drive_file_id": drive_file_id,
-            "filename": filename,
-            "events_count": len(enriched_events),
-            "manifest": manifest.model_dump(),
-        })
+        job["stage"] = "complete"
+        job["progress_pct"] = 100
+        job["stage_description"] = f"Complete! {len(enriched_events)} rugby moments ready."
+        job["manifest"] = manifest.model_dump()
+        job["drive_file_id"] = drive_file_id
+        job["updated_at"] = time.time()
+        logger.info("Ingest job %s finished in %.1fs", job_id, time.time() - start_time)
+
     except Exception as exc:
-        logger.exception("Failed to ingest Veo match %s: %s", slug, exc)
-        return jsonify({"job_id": job_id, "status": "error", "error": str(exc)}), 500
+        logger.exception("Ingest job %s failed: %s", job_id, exc)
+        job["stage"] = "error"
+        job["error"] = str(exc)
+        job["updated_at"] = time.time()
+
+
+# ---------------------------------------------------------------------------
+# POST /veo/ingest
+# Direct Cloud-to-Cloud ingestion with real-time status tracking:
+# Returns job_id immediately (HTTP 202) while streaming proceeds in background.
+# ---------------------------------------------------------------------------
+
+@app.route("/veo/ingest", methods=["POST"])
+def ingest_veo_match() -> Response:
+    data = request.get_json(silent=True) or {}
+    match_input = data.get("match") or data.get("match_id") or data.get("url")
+    custom_title = data.get("title")
+
+    if not match_input:
+        return jsonify({"error": "match (URL, slug, or ID) is required"}), 400
+
+    token = os.environ.get("VEO_API_TOKEN", "")
+    client = VeoApiClient(token=token)
+    slug = client.parse_slug_or_id(match_input)
+    match_title = custom_title or f"SF Fog RFC — {slug.replace('-', ' ').title()}"
+
+    job_id = uuid.uuid4().hex[:8]
+    logger.info("Starting background Veo ingest job %s for match: %s", job_id, slug)
+
+    JOBS[job_id] = {
+        "job_id": job_id,
+        "match_id": slug,
+        "title": match_title,
+        "stage": "starting",
+        "stage_description": "Initializing direct Veo-to-Drive ingestion...",
+        "progress_pct": 0,
+        "bytes_uploaded": 0,
+        "total_bytes": 0,
+        "mb_uploaded": 0.0,
+        "mb_total": 0.0,
+        "speed_mbps": 0.0,
+        "eta_seconds": 0,
+        "events_count": 0,
+        "manifest": None,
+        "drive_file_id": None,
+        "error": None,
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+
+    thread = threading.Thread(
+        target=_process_veo_ingest_job,
+        args=(job_id, slug, match_title, client),
+        daemon=True,
+    )
+    thread.start()
+
+    return jsonify({
+        "status": "processing",
+        "job_id": job_id,
+        "match_id": slug,
+        "title": match_title,
+        "message": f"Ingest started. Track live progress at /jobs/{job_id}",
+    }), 202
+
+
+# ---------------------------------------------------------------------------
+# GET /jobs/<job_id>
+# Live status tracker endpoint polled by the Game Day Media Hub UI.
+# ---------------------------------------------------------------------------
+
+@app.route("/jobs/<job_id>", methods=["GET"])
+def get_job_status(job_id: str) -> Response:
+    job = JOBS.get(job_id)
+    if not job:
+        return jsonify({"error": f"Job {job_id} not found"}), 404
+    return jsonify(job)
 
 
 # ---------------------------------------------------------------------------
