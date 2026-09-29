@@ -2,26 +2,29 @@
 SF Fog RFC - Rugby Video Analysis Cloud Run API
 ================================================
 Stateless REST API designed to run on Google Cloud Run (Python 3.11 / Flask).
-Triggered by the Squarespace portal JS, Veo notification webhooks, and
+Triggered by the Squarespace portal JS, Veo direct connector, and
 Drive watch-channel push notifications.
 
 All video assets live in Google Workspace Shared Drive (100 TB nonprofit quota).
 Processing is done in-container (FFmpeg + Librosa) and results written back to Drive.
 
 Endpoints:
-  POST /analyze            - Trigger analysis of a Drive folder for a match
-  GET  /manifest/<match_id> - Retrieve generated manifest.json for a match
-  POST /extract            - Kick off on-demand FFmpeg clip extraction
-  POST /veo/webhook        - Receive Veo email-style notification (or API callback)
-  GET  /health             - Cloud Run health check
+  GET  /health                  - Cloud Run health check
+  GET  /veo/recordings          - List all recent club match recordings from Veo
+  GET  /veo/match/<slug_or_id>  - Get match video URL and AI rugby highlights from Veo
+  POST /veo/ingest              - Stream match MP4 directly from Veo CDN to Google Drive & ingest
+  POST /veo/webhook             - Receive Veo notification payload or email body
+  POST /analyze                 - Trigger analysis of a Drive folder for a match
+  GET  /manifest/<match_id>     - Retrieve generated manifest.json for a match
+  POST /extract                 - Kick off on-demand FFmpeg clip extraction
 
-Environment Variables (set via Secret Manager):
+Environment Variables (set via Secret Manager in Cloud Run):
   GOOGLE_CLOUD_PROJECT     - GCP project ID
   DRIVE_INGEST_FOLDER_ID   - Google Drive folder ID for game day ingest
   DRIVE_OUTPUT_FOLDER_ID   - Google Drive folder ID for social-ready clips
   GCS_BUCKET               - Cloud Storage bucket for proxy previews
-  GEMINI_API_KEY           - Gemini API key (from Secret Manager in prod)
-  VEO_API_TOKEN            - Veo API bearer token
+  GEMINI_API_KEY           - Gemini API key
+  VEO_API_TOKEN            - Optional Veo API bearer token (for private recordings)
 """
 
 import os
@@ -33,16 +36,49 @@ from flask import Flask, jsonify, request, Response
 
 # Local engine imports (bundled in same container image)
 from engine.models import Manifest, VideoSource, Event
-from engine.veo_ingest import parse_veo_email_body, fetch_veo_match_events
+from engine.veo_ingest import (
+    parse_veo_email_body,
+    parse_veo_highlights,
+    fetch_veo_match_events,
+)
 from engine.ai_suggester import generate_clip_pairings
 from engine.clipper import build_lossless_cut_command, build_reframe_command
 from cloud_service.drive_client import DriveClient
+from cloud_service.veo_api_client import VeoApiClient
 from cloud_service.job_runner import run_analysis_job, run_extract_job
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Global CORS handling — Allows Squarespace and localhost origins
+# ---------------------------------------------------------------------------
+
+@app.after_request
+def add_cors_headers(response: Response) -> Response:
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = (
+        "Content-Type, Authorization, X-Fog-Api-Key"
+    )
+    return response
+
+
+@app.before_request
+def handle_preflight() -> Optional[Response]:
+    if request.method == "OPTIONS":
+        res = Response()
+        res.headers["Access-Control-Allow-Origin"] = "*"
+        res.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        res.headers["Access-Control-Allow-Headers"] = (
+            "Content-Type, Authorization, X-Fog-Api-Key"
+        )
+        return res
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Health check — required by Cloud Run
@@ -51,6 +87,140 @@ app = Flask(__name__)
 @app.route("/health", methods=["GET"])
 def health() -> Response:
     return jsonify({"status": "ok", "service": "fog-video-analysis-api"})
+
+
+# ---------------------------------------------------------------------------
+# GET /veo/recordings
+# Returns all recent match recordings from the Fog's Veo clubhouse.
+# Used by the Squarespace Game Day Media Hub for 1-click ingest.
+# ---------------------------------------------------------------------------
+
+@app.route("/veo/recordings", methods=["GET"])
+def list_veo_recordings() -> Response:
+    try:
+        club_slug = request.args.get("club", "san-francisco-fog-rfc")
+        token = os.environ.get("VEO_API_TOKEN", "")
+        client = VeoApiClient(token=token)
+        recordings = client.list_club_recordings(club_slug=club_slug)
+
+        formatted = []
+        for r in recordings:
+            formatted.append({
+                "identifier": r.get("identifier"),
+                "slug": r.get("slug"),
+                "title": r.get("title", "SF Fog Match"),
+                "start": r.get("start") or r.get("created"),
+                "duration": r.get("duration"),
+                "thumbnail": r.get("thumbnail"),
+                "url": f"https://app.veo.co{r.get('url')}" if r.get("url") else None,
+                "status": r.get("processing_status"),
+            })
+
+        return jsonify({
+            "club": club_slug,
+            "count": len(formatted),
+            "recordings": formatted,
+        })
+    except Exception as exc:
+        logger.exception("Failed to fetch Veo recordings: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# GET /veo/match/<match_id_or_slug>
+# Fetch video download details and pre-tagged AI rugby events from Veo.
+# ---------------------------------------------------------------------------
+
+@app.route("/veo/match/<match_id_or_slug>", methods=["GET"])
+def get_veo_match(match_id_or_slug: str) -> Response:
+    try:
+        token = os.environ.get("VEO_API_TOKEN", "")
+        client = VeoApiClient(token=token)
+        details = client.resolve_match_details(match_id_or_slug)
+        if not details:
+            return jsonify({"error": f"Match not found on Veo: {match_id_or_slug}"}), 404
+        return jsonify(details)
+    except Exception as exc:
+        logger.exception("Failed to resolve Veo match %s: %s", match_id_or_slug, exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# POST /veo/ingest
+# Direct Cloud-to-Cloud ingestion:
+# 1. Resolves match MP4 URL and pre-tagged events from Veo
+# 2. Streams the 1080p MP4 directly from Veo CDN to Google Drive (zero local bandwidth)
+# 3. Builds and writes the initial rugby manifest with pre-tagged AI events
+# ---------------------------------------------------------------------------
+
+@app.route("/veo/ingest", methods=["POST"])
+def ingest_veo_match() -> Response:
+    data = request.get_json(silent=True) or {}
+    match_input = data.get("match") or data.get("match_id") or data.get("url")
+    custom_title = data.get("title")
+
+    if not match_input:
+        return jsonify({"error": "match (URL, slug, or ID) is required"}), 400
+
+    token = os.environ.get("VEO_API_TOKEN", "")
+    client = VeoApiClient(token=token)
+    slug = client.parse_slug_or_id(match_input)
+
+    logger.info("Starting direct Veo ingest for match: %s", slug)
+    details = client.resolve_match_details(slug)
+    if not details or not details.get("video_url"):
+        return jsonify({"error": f"Could not resolve video URL for match: {slug}"}), 404
+
+    video_url = details["video_url"]
+    filename = f"{slug}_1080p.mp4"
+    match_title = custom_title or f"SF Fog RFC — {slug.replace('-', ' ').title()}"
+
+    drive = DriveClient()
+    job_id = str(uuid.uuid4())
+
+    try:
+        # Stream video from Veo CDN directly into Google Drive
+        drive_file_id = drive.stream_url_to_folder(
+            download_url=video_url,
+            filename=filename,
+        )
+
+        # Parse pre-tagged Veo rugby highlights into standard Event models
+        events = parse_veo_highlights(details.get("highlights", []), source_id="veo_main")
+        enriched_events = generate_clip_pairings(events)
+
+        # Construct and save manifest to Google Drive
+        manifest = Manifest(
+            match_id=slug,
+            match_title=match_title,
+            match_date="",
+            sources=[
+                VideoSource(
+                    source_id="veo_main",
+                    label="Veo Follow-Cam",
+                    filename=filename,
+                    drive_file_id=drive_file_id,
+                    resolution=f"{details.get('width', 1920)}x{details.get('height', 1080)}",
+                    fps=30.0,
+                    duration=0.0,
+                )
+            ],
+            events=enriched_events,
+        )
+        drive.write_manifest(manifest)
+
+        return jsonify({
+            "status": "ingested",
+            "job_id": job_id,
+            "match_id": slug,
+            "drive_file_id": drive_file_id,
+            "filename": filename,
+            "events_count": len(enriched_events),
+            "manifest": manifest.model_dump(),
+        })
+    except Exception as exc:
+        logger.exception("Failed to ingest Veo match %s: %s", slug, exc)
+        return jsonify({"job_id": job_id, "status": "error", "error": str(exc)}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -148,9 +318,6 @@ def extract() -> Response:
 # POST /veo/webhook
 # Receives Veo match-ready notification (email body forwarded via Activepieces
 # or a Veo API callback payload).
-# Body (JSON):
-#   email_body str  — raw Veo email text (optional, for email-parse path)
-#   match_id   str  — Veo match UUID (optional, for direct API path)
 # ---------------------------------------------------------------------------
 
 @app.route("/veo/webhook", methods=["POST"])
@@ -170,16 +337,15 @@ def veo_webhook() -> Response:
 
     job_id = str(uuid.uuid4())
     try:
-        # Fetch events via Veo API and trigger a full analysis job
-        from cloud_service.veo_api_client import VeoApiClient
-        veo_client = VeoApiClient(token=os.environ.get("VEO_API_TOKEN", ""))
-        events = fetch_veo_match_events(match_id, source_id="veo_main", client=veo_client)
+        token = os.environ.get("VEO_API_TOKEN", "")
+        client = VeoApiClient(token=token)
+        events = fetch_veo_match_events(match_id, source_id="veo_main", client=client)
         enriched = generate_clip_pairings(events)
 
         manifest = Manifest(
             match_id=match_id,
             match_title=f"SF Fog RFC — Veo Match {match_id[:8]}",
-            match_date="",  # Populated from Veo metadata in production
+            match_date="",
             sources=[],
             events=enriched,
         )

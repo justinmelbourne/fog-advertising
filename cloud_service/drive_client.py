@@ -15,9 +15,11 @@ import logging
 import os
 from typing import Any, Optional
 
+import requests
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 from google.auth import default as google_auth_default
+from google.auth.transport.requests import Request as GoogleAuthRequest
 
 from engine.models import Manifest
 
@@ -40,6 +42,7 @@ class DriveClient:
 
     def __init__(self) -> None:
         creds, _ = google_auth_default(scopes=["https://www.googleapis.com/auth/drive"])
+        self._creds = creds
         self._service = build("drive", "v3", credentials=creds, cache_discovery=False)
         self._ingest_folder_id: str = os.environ["DRIVE_INGEST_FOLDER_ID"]
         self._output_folder_id: str = os.environ["DRIVE_OUTPUT_FOLDER_ID"]
@@ -159,6 +162,87 @@ class DriveClient:
             )
         logger.info("Uploaded %s -> Drive %s (%s)", filename, folder_id, file["id"])
         return file["id"]
+
+    def stream_url_to_folder(
+        self, download_url: str, filename: str, folder_id: Optional[str] = None
+    ) -> str:
+        """
+        Streams a video file directly from a remote CDN URL into Google Drive
+        using Google Drive Resumable Upload protocol.
+        Requires zero local disk storage and minimal (10MB buffer) memory usage.
+        """
+        target_folder = folder_id or self._ingest_folder_id
+
+        # 1. Fetch remote content length
+        head_resp = requests.head(download_url, timeout=30, allow_redirects=True)
+        head_resp.raise_for_status()
+        total_size = int(head_resp.headers.get("content-length", 0))
+
+        # 2. Get fresh Google OAuth token
+        if not self._creds.valid:
+            self._creds.refresh(GoogleAuthRequest())
+        token = self._creds.token
+
+        # 3. Initiate Drive Resumable Upload session
+        init_url = (
+            "https://www.googleapis.com/upload/drive/v3/files"
+            "?uploadType=resumable&supportsAllDrives=true"
+        )
+        init_headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=UTF-8",
+            "X-Upload-Content-Type": "video/mp4",
+        }
+        if total_size > 0:
+            init_headers["X-Upload-Content-Length"] = str(total_size)
+
+        metadata = {"name": filename, "parents": [target_folder]}
+        init_res = requests.post(
+            init_url, headers=init_headers, json=metadata, timeout=30
+        )
+        init_res.raise_for_status()
+
+        upload_session_url = init_res.headers.get("Location")
+        if not upload_session_url:
+            raise RuntimeError("Drive API did not return a resumable Location header")
+
+        logger.info(
+            "Initiated Drive streaming upload for %s (size: %s bytes)",
+            filename,
+            total_size,
+        )
+
+        # 4. Stream chunks from CDN to Drive session
+        chunk_size = 10 * 1024 * 1024  # 10 MB chunks
+        start_byte = 0
+        file_id = ""
+
+        with requests.get(download_url, stream=True, timeout=60) as stream_resp:
+            stream_resp.raise_for_status()
+            for chunk in stream_resp.iter_content(chunk_size=chunk_size):
+                if not chunk:
+                    continue
+                end_byte = start_byte + len(chunk) - 1
+                chunk_headers = {
+                    "Content-Range": f"bytes {start_byte}-{end_byte}/{total_size if total_size > 0 else '*'}",
+                    "Content-Length": str(len(chunk)),
+                }
+
+                upload_resp = requests.put(
+                    upload_session_url, headers=chunk_headers, data=chunk, timeout=120
+                )
+                if upload_resp.status_code in (200, 201):
+                    file_id = upload_resp.json().get("id", "")
+                    break
+                elif upload_resp.status_code == 308:
+                    pass
+                else:
+                    upload_resp.raise_for_status()
+
+                start_byte = end_byte + 1
+
+        logger.info("Successfully streamed %s directly to Drive: %s", filename, file_id)
+        return file_id
 
     # ------------------------------------------------------------------
     # Internal helpers
