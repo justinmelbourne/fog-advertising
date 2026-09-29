@@ -3,11 +3,12 @@
    Strict adherence to /fog-rugby-design Canon
    ========================================================================== */
 
-// --- The Exact Six-Color System --------------------------------------------
+// --- The Exact Six-Color System + One Tint (Rev 4) -------------------------
 @fog-blue:       #006EB6; // Primary blue: headlines-2, links, primary buttons
-@fog-light-blue: #24A0F1; // Accent sky blue: hovers, eyebrows on dark, focus
-@fog-dark-blue:  #00243C; // Pitch navy: dark hero, footers, default h1
-@fog-gray:       #DCDDDE; // Neutral gray: card borders, stat table dividing lines
+@fog-light-blue: #24A0F1; // Accent sky blue: hovers on dark, eyebrows on dark
+@fog-dark-blue:  #00243C; // Pitch navy: dark hero, footers, hover fill on light
+@fog-gray:       #DCDDDE; // Neutral gray: hairlines, badges, stat dividers
+@fog-gray-50:    #F1F2F3; // The one permitted tint: card ground, light sections
 @fog-dark-gray:  #141718; // Body copy text (near-black, never pure black for text)
 @fog-black:      #000000;
 @fog-white:      #FFFFFF;
@@ -16,9 +17,9 @@
 @fog-green:      #157A38; // High excitement / success
 @fog-red:        #C4321F; // Low excitement / error / loss
 
-// Geometry tokens
-@fog-radius-btn:  2px;    // Strict 2px radius (Zero-Pill Law)
-@fog-radius-card: 4px;    // Flat, editorial near-square cards
+// Geometry tokens (Rev 4: square corners everywhere, no circles)
+@fog-radius-btn:  0;      // Zero radius everywhere
+@fog-radius-card: 0;      // Zero radius everywhere
 
 // Typography tokens
 @fog-font-display: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
@@ -350,17 +351,17 @@
     }
   }
 
-  // --- Button Specs (Zero-Pill Law: strictly 2px radius) -------------------
+  // --- Button Specs (Rev 4 Surface Matrix: 0 radius, surface hovers) -------
   .fog-button,
   .fog-btn {
     display: inline-block;
-    border-radius: @fog-radius-btn;
+    border-radius: 0;
     border: 2px solid @fog-blue;
     background: @fog-blue;
     color: @fog-white;
-    padding: 8px 16px;
+    padding: 10px 20px;
     font-family: @fog-font-display;
-    font-size: 0.75rem;
+    font-size: 0.9375rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -370,10 +371,16 @@
     line-height: 1.2;
     transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 
-    &:hover {
-      background: @fog-light-blue;
-      border-color: @fog-light-blue;
+    &:hover,
+    &:active {
+      background: @fog-dark-blue; // Surface matrix: dark-blue hover on light!
+      border-color: @fog-dark-blue;
       color: @fog-white;
+    }
+
+    &:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 2px @fog-white, 0 0 0 4px @fog-blue;
     }
 
     &--primary {
@@ -381,25 +388,27 @@
       border-color: @fog-blue;
       color: @fog-white;
 
-      &:hover {
-        background: @fog-light-blue;
-        border-color: @fog-light-blue;
+      &:hover,
+      &:active {
+        background: @fog-dark-blue;
+        border-color: @fog-dark-blue;
       }
     }
 
     &--secondary {
       background: transparent;
-      border: 2px solid @fog-blue;
-      color: @fog-blue;
+      border: 2px solid @fog-dark-blue;
+      color: @fog-dark-blue;
 
-      &:hover {
-        background: @fog-blue;
-        border-color: @fog-blue;
+      &:hover,
+      &:active {
+        background: @fog-dark-blue;
+        border-color: @fog-dark-blue;
         color: @fog-white;
       }
 
       &.active {
-        background: @fog-blue;
+        background: @fog-dark-blue;
         color: @fog-white;
       }
     }
@@ -418,10 +427,10 @@
   }
 
   .fog-ratio-btn {
-    border-radius: @fog-radius-btn;
-    border: 2px solid @fog-blue;
+    border-radius: 0;
+    border: 2px solid @fog-dark-blue;
     background: transparent;
-    color: @fog-blue;
+    color: @fog-dark-blue;
     padding: 6px 12px;
     font-family: @fog-font-display;
     font-size: 0.75rem;
@@ -432,12 +441,12 @@
 
     &[aria-pressed="true"],
     &.active {
-      background: @fog-blue;
+      background: @fog-dark-blue;
       color: @fog-white;
     }
 
     &:hover:not([aria-pressed="true"]) {
-      background: @fog-blue;
+      background: @fog-dark-blue;
       color: @fog-white;
     }
   }
