@@ -608,6 +608,85 @@
     margin-bottom: 2rem;
   }
 
+  // --- Live Ingest & Analysis Status Tracker ----------------------------------
+  .fog-tracker-card {
+    grid-column: 1 / -1;
+    background: @fog-gray-50;
+    border: 1px solid @fog-gray;
+    border-left: 4px solid @fog-blue;
+    border-radius: 0;
+    padding: 1.25rem;
+    margin-bottom: 1.5rem;
+
+    &__header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 0.75rem;
+    }
+
+    &__badge {
+      display: inline-block;
+      padding: 3px 6px;
+      font-family: @fog-font-display;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: @fog-white;
+      background: @fog-blue;
+      border-radius: 0;
+      margin-bottom: 0.25rem;
+
+      &--complete { background: @fog-green; }
+      &--error    { background: @fog-red; }
+    }
+
+    &__title {
+      margin: 0;
+      font-size: 1rem;
+      font-family: @fog-font-display;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: @fog-dark-blue;
+    }
+
+    &__pct {
+      font-family: @fog-font-display;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: @fog-blue;
+      line-height: 1;
+    }
+
+    &__track {
+      width: 100%;
+      height: 8px;
+      background: @fog-gray;
+      border-radius: 0;
+      overflow: hidden;
+      margin-bottom: 0.5rem;
+    }
+
+    &__fill {
+      height: 100%;
+      background: @fog-blue;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    &__meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      font-size: 0.8rem;
+      color: @fog-dark-gray;
+    }
+  }
+
   // --- Media State Messages ------------------------------------------------
   .fog-media-state {
     grid-column: 1 / -1;

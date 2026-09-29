@@ -210,39 +210,119 @@
   }
 
   function ingestVeoMatch(slugOrUrl, title) {
+    var tracker = document.getElementById("veo-tracker");
+    var titleEl = document.getElementById("tracker-title");
+    var pctEl = document.getElementById("tracker-pct");
+    var barEl = document.getElementById("tracker-bar");
+    var badgeEl = document.getElementById("tracker-stage-badge");
+    var statusText = document.getElementById("tracker-status-text");
+    var metricsEl = document.getElementById("tracker-metrics");
     var statusEl = document.getElementById("veo-ingest-status");
-    if (statusEl) {
-      statusEl.textContent = "Streaming 1080p match video from Veo CDN to Google Drive & analyzing rugby tags… this takes ~30-60s.";
-      statusEl.hidden = false;
+
+    if (tracker) {
+      tracker.hidden = false;
+      if (titleEl) titleEl.textContent = title || "SF Fog Match";
+      if (pctEl) pctEl.textContent = "0%";
+      if (barEl) barEl.style.width = "0%";
+      if (badgeEl) {
+        badgeEl.textContent = "Connecting";
+        badgeEl.className = "fog-tracker-card__badge";
+      }
+      if (statusText) statusText.textContent = "Connecting to Veo CDN & Google Drive…";
+      if (metricsEl) metricsEl.textContent = "0 MB / 0 MB • 0 Mbps";
     }
+
     _showToast("Ingest started for " + (title || slugOrUrl) + "…");
 
     _apiFetch("/veo/ingest", {
       method: "POST",
       body: JSON.stringify({
         match: slugOrUrl,
-        title: title
+        title: title,
       }),
     })
       .then(function (result) {
-        if (statusEl) {
-          statusEl.textContent = "Ingested! " + result.events_count + " rugby moments detected. Redirecting to clips…";
+        if (result.job_id) {
+          _pollJobStatus(result.job_id);
+        } else if (result.manifest) {
+          _onIngestComplete(result.manifest);
         }
-        _showToast("Match ingested! " + result.events_count + " moments ready.");
-        currentManifest = result.manifest;
-        _renderMatchHeader(result.manifest);
-        _renderMomentGrid(result.manifest.events || []);
-        setTimeout(function () {
-          _showTab("moments");
-          if (statusEl) statusEl.hidden = true;
-        }, 1500);
       })
       .catch(function (err) {
-        if (statusEl) {
-          statusEl.textContent = "Ingest failed: " + err.message;
+        if (badgeEl) {
+          badgeEl.textContent = "Error";
+          badgeEl.className = "fog-tracker-card__badge fog-tracker-card__badge--error";
         }
+        if (statusText) statusText.textContent = "Ingest failed: " + err.message;
         _showToast("Ingest error: " + err.message, true);
       });
+  }
+
+  function _pollJobStatus(jobId) {
+    var tracker = document.getElementById("veo-tracker");
+    var pctEl = document.getElementById("tracker-pct");
+    var barEl = document.getElementById("tracker-bar");
+    var badgeEl = document.getElementById("tracker-stage-badge");
+    var statusText = document.getElementById("tracker-status-text");
+    var metricsEl = document.getElementById("tracker-metrics");
+
+    var timer = setInterval(function () {
+      _apiFetch("/jobs/" + encodeURIComponent(jobId))
+        .then(function (job) {
+          var pct = job.progress_pct || 0;
+          if (pctEl) pctEl.textContent = pct + "%";
+          if (barEl) barEl.style.width = pct + "%";
+
+          if (badgeEl) {
+            badgeEl.textContent = (job.stage || "processing").toUpperCase();
+            if (job.stage === "complete") {
+              badgeEl.className = "fog-tracker-card__badge fog-tracker-card__badge--complete";
+            } else if (job.stage === "error") {
+              badgeEl.className = "fog-tracker-card__badge fog-tracker-card__badge--error";
+            } else {
+              badgeEl.className = "fog-tracker-card__badge";
+            }
+          }
+
+          if (statusText) {
+            statusText.textContent = job.stage_description || "Processing match video…";
+          }
+
+          if (metricsEl) {
+            var mbUp = job.mb_uploaded || 0;
+            var mbTot = job.mb_total || 0;
+            var speed = job.speed_mbps || 0;
+            var eta = job.eta_seconds || 0;
+            var etaStr = eta > 0 ? (" • " + eta + "s remaining") : "";
+            metricsEl.textContent = mbUp + " MB / " + mbTot + " MB (" + speed + " Mbps" + etaStr + ")";
+          }
+
+          if (job.stage === "complete") {
+            clearInterval(timer);
+            _showToast("Match ingested! " + (job.events_count || 0) + " rugby moments ready.");
+            if (job.manifest) {
+              _onIngestComplete(job.manifest);
+            }
+          } else if (job.stage === "error") {
+            clearInterval(timer);
+            _showToast("Ingest error: " + (job.error || "Unknown error"), true);
+          }
+        })
+        .catch(function (err) {
+          console.warn("[FogMediaHub] Poll error:", err);
+        });
+    }, 1200);
+  }
+
+  function _onIngestComplete(manifest) {
+    currentManifest = manifest;
+    _renderMatchHeader(manifest);
+    _renderMomentGrid(manifest.events || []);
+    setTimeout(function () {
+      _showTab("moments");
+      var tracker = document.getElementById("veo-tracker");
+      if (tracker) tracker.hidden = true;
+    }, 1800);
   }
 
   // -------------------------------------------------------------------------

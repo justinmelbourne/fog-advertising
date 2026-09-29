@@ -535,6 +535,79 @@
 .fog-media-portal .fog-veo-section {
   margin-bottom: 2rem;
 }
+.fog-media-portal .fog-tracker-card {
+  grid-column: 1 / -1;
+  background: #F1F2F3;
+  border: 1px solid #DCDDDE;
+  border-left: 4px solid #006EB6;
+  border-radius: 0;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+.fog-media-portal .fog-tracker-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
+}
+.fog-media-portal .fog-tracker-card__badge {
+  display: inline-block;
+  padding: 3px 6px;
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #FFFFFF;
+  background: #006EB6;
+  border-radius: 0;
+  margin-bottom: 0.25rem;
+}
+.fog-media-portal .fog-tracker-card__badge--complete {
+  background: #157A38;
+}
+.fog-media-portal .fog-tracker-card__badge--error {
+  background: #C4321F;
+}
+.fog-media-portal .fog-tracker-card__title {
+  margin: 0;
+  font-size: 1rem;
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #00243C;
+}
+.fog-media-portal .fog-tracker-card__pct {
+  font-family: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #006EB6;
+  line-height: 1;
+}
+.fog-media-portal .fog-tracker-card__track {
+  width: 100%;
+  height: 8px;
+  background: #DCDDDE;
+  border-radius: 0;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+.fog-media-portal .fog-tracker-card__fill {
+  height: 100%;
+  background: #006EB6;
+  width: 0%;
+  transition: width 0.3s ease;
+}
+.fog-media-portal .fog-tracker-card__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: #141718;
+}
 .fog-media-portal .fog-media-state {
   grid-column: 1 / -1;
   padding: 2rem 0;

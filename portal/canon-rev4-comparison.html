@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SF Fog RFC — Design Canon Rev 4: Before & After Visual Comparison</title>
+  <style>
+    /* -----------------------------------------------------------------------
+       Futura PT font loading with system fallbacks
+       ----------------------------------------------------------------------- */
+    @font-face {
+      font-family: "Futura PT";
+      src: url("https://static1.squarespace.com/static/ta/5877fed2893fc0457ba54704/118/assets/fonts/FuturaPTBook.woff2") format("woff2");
+      font-weight: 400;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: "Futura PT";
+      src: url("https://static1.squarespace.com/static/ta/5877fed2893fc0457ba54704/118/assets/fonts/FuturaPTMedium.woff2") format("woff2");
+      font-weight: 500;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: "Futura PT";
+      src: url("https://static1.squarespace.com/static/ta/5877fed2893fc0457ba54704/118/assets/fonts/FuturaPTDemi.woff2") format("woff2");
+      font-weight: 600;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: "Futura PT";
+      src: url("https://static1.squarespace.com/static/ta/5877fed2893fc0457ba54704/118/assets/fonts/FuturaPTBold.woff2") format("woff2");
+      font-weight: 700;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: "Futura PT";
+      src: url("https://static1.squarespace.com/static/ta/5877fed2893fc0457ba54704/118/assets/fonts/FuturaPTHeavy.woff2") format("woff2");
+      font-weight: 800;
+      font-style: normal;
+    }
+
+    :root {
+      --fog-blue: #006EB6;
+      --fog-light-blue: #24A0F1;
+      --fog-dark-blue: #00243C;
+      --fog-gray: #DCDDDE;
+      --fog-gray-50: #F1F2F3;
+      --fog-dark-gray: #141718;
+      --fog-white: #FFFFFF;
+      --fog-green: #157A38;
+      --fog-red: #C4321F;
+      --font-display: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+      --font-body: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+      --focus-ring: 0 0 0 2px var(--fog-white), 0 0 0 4px var(--fog-blue);
+      --focus-ring-dark: 0 0 0 2px var(--fog-dark-blue), 0 0 0 4px var(--fog-white);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font-body);
+      font-weight: 400;
+      font-size: 16px;
+      line-height: 1.6;
+      color: var(--fog-dark-gray);
+      background: #F4F6F8;
+      padding-bottom: 5rem;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    header.doc-header {
+      background: var(--fog-dark-blue);
+      color: var(--fog-white);
+      padding: 3rem 2rem 2.5rem;
+      border-bottom: 3px solid var(--fog-blue);
+    }
+
+    .doc-container {
+      max-width: 1240px;
+      margin: 0 auto;
+    }
+
+    .doc-eyebrow {
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--fog-light-blue);
+      margin-bottom: 0.5rem;
+      display: inline-block;
+    }
+
+    .doc-title {
+      font-family: var(--font-display);
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      line-height: 1.05;
+      margin-bottom: 0.75rem;
+    }
+
+    .doc-intro {
+      color: var(--fog-gray);
+      font-size: 1.1rem;
+      max-width: 800px;
+    }
+
+    .comparison-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 3.5rem;
+      margin-top: 3rem;
+    }
+
+    .ruling-card {
+      background: var(--fog-white);
+      border: 1px solid var(--fog-gray);
+      padding: 2.25rem;
+    }
+
+    .ruling-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 1.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--fog-gray);
+    }
+
+    .ruling-number {
+      font-family: var(--font-display);
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--fog-blue);
+      display: block;
+      margin-bottom: 0.25rem;
+    }
+
+    .ruling-title {
+      font-family: var(--font-display);
+      font-size: 1.5rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--fog-dark-blue);
+    }
+
+    .ruling-summary {
+      color: var(--fog-dark-gray);
+      font-size: 0.95rem;
+      margin-top: 0.35rem;
+    }
+
+    .side-by-side {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+    }
+
+    @media (max-width: 860px) {
+      .side-by-side { grid-template-columns: 1fr; }
+    }
+
+    .state-panel {
+      padding: 1.75rem;
+      border: 1px solid var(--fog-gray);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .state-panel--before {
+      background: #F9FAFB;
+      border-top: 4px solid #A0AEC0;
+    }
+
+    .state-panel--after {
+      background: var(--fog-white);
+      border-top: 4px solid var(--fog-blue);
+      box-shadow: 0 4px 12px rgba(0, 36, 60, 0.05);
+    }
+
+    .state-panel--after-grey {
+      background: var(--fog-gray-50);
+      border-top: 4px solid var(--fog-blue);
+    }
+
+    .state-panel--dark {
+      background: var(--fog-dark-blue);
+      color: var(--fog-white);
+    }
+
+    .state-tag {
+      display: inline-block;
+      font-family: var(--font-display);
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 3px 8px;
+      margin-bottom: 1.25rem;
+      width: fit-content;
+    }
+
+    .state-tag--before {
+      background: #E2E8F0;
+      color: #4A5568;
+    }
+
+    .state-tag--after {
+      background: var(--fog-blue);
+      color: var(--fog-white);
+    }
+
+    .preview-stage {
+      padding: 2rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1.25rem;
+      min-height: 180px;
+    }
+
+    .meta-notes {
+      margin-top: 1.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid rgba(0,0,0,0.08);
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+
+    .meta-notes ul {
+      margin-left: 1.25rem;
+      margin-top: 0.35rem;
+    }
+
+    /* -----------------------------------------------------------------------
+       MOCKUP 1: GEOMETRY (Before 2px/4px pill/circles vs After 0 Square)
+       ----------------------------------------------------------------------- */
+    /* BEFORE (Pill / 2px-4px / Circle) */
+    .btn-before-primary {
+      background: #006EB6;
+      color: #FFFFFF;
+      padding: 10px 20px;
+      border-radius: 2px; /* Legacy 2px radius */
+      border: 2px solid transparent;
+      font-family: "Futura PT", sans-serif;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+    }
+    .badge-before-pill {
+      background: #006EB6;
+      color: #FFF;
+      padding: 4px 12px;
+      border-radius: 20px; /* Legacy pill */
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .avatar-before-circle {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%; /* Legacy circle */
+      background: #00243C;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #FFF;
+      font-weight: bold;
+    }
+    .timeline-dot-before {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%; /* Legacy circle dot */
+      background: #006EB6;
+      display: inline-block;
+    }
+
+    /* AFTER (Rev 4: Strict 0 Radius Everywhere + Star Marker) */
+    .btn-after-primary {
+      background: var(--fog-blue);
+      color: var(--fog-white);
+      padding: 10px 20px;
+      border-radius: 0; /* Rev 4: STRICT 0 */
+      border: 2px solid var(--fog-blue);
+      font-family: var(--font-display);
+      font-size: 0.9375rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .btn-after-primary:hover {
+      background: var(--fog-dark-blue);
+      border-color: var(--fog-dark-blue);
+    }
+    .badge-after-square {
+      background: var(--fog-blue);
+      color: var(--fog-white);
+      padding: 4px 8px;
+      border-radius: 0; /* Rev 4: STRICT 0 */
+      font-family: var(--font-display);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .avatar-after-square {
+      width: 72px;
+      height: 72px;
+      border-radius: 0; /* Rev 4: STRICT 0 SQUARE */
+      background: var(--fog-dark-blue);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #FFF;
+      font-weight: bold;
+      border: 2px solid var(--fog-gray);
+    }
+    .marker-after-star {
+      width: 18px;
+      height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--fog-blue);
+    }
+
+    /* -----------------------------------------------------------------------
+       MOCKUP 2: SURFACE MATRIX HOVERS (Before light sky tint vs After navy fill)
+       ----------------------------------------------------------------------- */
+    .hover-demo-btn {
+      padding: 12px 24px;
+      font-family: var(--font-display);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-size: 0.875rem;
+      cursor: pointer;
+      display: inline-block;
+      text-align: center;
+      width: 100%;
+      max-width: 260px;
+    }
+
+    /* Before: Light Sky tint hover */
+    .btn-before-hover-demo {
+      background: #006EB6;
+      border: 2px solid #006EB6;
+      color: #FFF;
+      border-radius: 2px;
+      transition: 0.15s;
+    }
+    .btn-before-hover-demo:hover {
+      background: #24A0F1; /* Old sky blue hover tint */
+      border-color: #24A0F1;
+    }
+
+    .btn-before-sec-demo {
+      background: transparent;
+      border: 2px solid #006EB6;
+      color: #006EB6;
+      border-radius: 2px;
+      transition: 0.15s;
+    }
+    .btn-before-sec-demo:hover {
+      background: #EBF5FB; /* Old pale wash */
+    }
+
+    /* After: Surface Matrix on Light (Hover -> Fog Dark Navy #00243C) */
+    .btn-after-hover-primary {
+      background: var(--fog-blue);
+      border: 2px solid var(--fog-blue);
+      color: var(--fog-white);
+      border-radius: 0;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .btn-after-hover-primary:hover {
+      background: var(--fog-dark-blue); /* Rev 4 Surface Matrix: Pitch Navy! */
+      border-color: var(--fog-dark-blue);
+      color: var(--fog-white);
+    }
+
+    .btn-after-hover-secondary {
+      background: transparent;
+      border: 2px solid var(--fog-dark-blue);
+      color: var(--fog-dark-blue);
+      border-radius: 0;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    }
+    .btn-after-hover-secondary:hover {
+      background: var(--fog-dark-blue); /* Fills with Dark Navy, text white */
+      border-color: var(--fog-dark-blue);
+      color: var(--fog-white);
+    }
+
+    /* -----------------------------------------------------------------------
+       MOCKUP 3: CARD SURFACES (Before random #F8F9FA vs After --fog-gray-50)
+       ----------------------------------------------------------------------- */
+    .card-before-sample {
+      background: #F8F9FA; /* Random off-white */
+      border: 1px solid #DCDDDE;
+      border-radius: 4px; /* Old rounded card */
+      padding: 1.25rem;
+      width: 100%;
+    }
+    .card-after-sample {
+      background: var(--fog-gray-50); /* The ONE permitted neutral tint */
+      border: 1px solid var(--fog-gray);
+      border-radius: 0; /* Rev 4: Square */
+      padding: 1.25rem;
+      width: 100%;
+      border-left: 4px solid var(--fog-blue);
+    }
+
+    /* -----------------------------------------------------------------------
+       MOCKUP 4: DOUBLE FOCUS RING
+       ----------------------------------------------------------------------- */
+    .focus-sample {
+      padding: 10px 20px;
+      font-family: var(--font-display);
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 0.85rem;
+      cursor: pointer;
+      border-radius: 0;
+    }
+    .focus-sample--old {
+      background: var(--fog-blue);
+      color: #FFF;
+      border: 2px solid transparent;
+      box-shadow: 0 0 0 3px rgba(0, 110, 182, 0.4); /* Fails 3:1 at 1.84:1 */
+    }
+    .focus-sample--new {
+      background: var(--fog-blue);
+      color: #FFF;
+      border: 2px solid transparent;
+      box-shadow: 0 0 0 2px var(--fog-white), 0 0 0 4px var(--fog-blue); /* Double Ring: Passes AA */
+    }
+
+    /* Interactive instruction pill */
+    .interactive-pill {
+      font-size: 0.75rem;
+      background: #E2E8F0;
+      color: #4A5568;
+      padding: 2px 8px;
+      font-weight: 600;
+      border-radius: 2px;
+      display: inline-block;
+      margin-bottom: 0.5rem;
+    }
+
+    /* Star SVG icon inline */
+    .svg-star {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
+  </style>
+</head>
+<body>
+
+<header class="doc-header">
+  <div class="doc-container">
+    <span class="doc-eyebrow">SF Fog RFC Brand Canon &bull; Rev 4 Rulings</span>
+    <h1 class="doc-title">Before &amp; After Visual Comparison</h1>
+    <p class="doc-intro">
+      Following rendered side-by-sides on phone and desktop (Justin, 2026-09-28), these rulings govern all geometry, hover behavior, focus indicators, and surface tokens.
+    </p>
+  </div>
+</header>
+
+<main class="doc-container" style="padding: 0 1.5rem;">
+  <div class="comparison-grid">
+
+    <!-- ===================================================================
+         RULING 1: GEOMETRY & SHAPE (NO CIRCLES, ZERO RADIUS)
+         =================================================================== -->
+    <article class="ruling-card" id="ruling-geometry">
+      <div class="ruling-header">
+        <div>
+          <span class="ruling-number">Ruling 01</span>
+          <h2 class="ruling-title">Geometry &bull; Square Corners Everywhere &amp; No Circles</h2>
+          <p class="ruling-summary">
+            <strong><code>border-radius: 0</code></strong> is the single law. Avatars, cards, buttons, badges, and markers are square. Circles are completely retired.
+          </p>
+        </div>
+      </div>
+
+      <div class="side-by-side">
+        <!-- Before -->
+        <div class="state-panel state-panel--before">
+          <div>
+            <span class="state-tag state-tag--before">Before (Rev 3 / Mixed)</span>
+            <div class="preview-stage">
+              <button class="btn-before-primary">2px Radius Button</button>
+              <span class="badge-before-pill">Pill Tag (Radius 20px)</span>
+              <div class="avatar-before-circle">50% Cir</div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span class="timeline-dot-before"></span>
+                <span style="font-size:0.85rem;">Circle timeline pin / dot</span>
+              </div>
+            </div>
+          </div>
+          <div class="meta-notes">
+            <strong>Legacy Defects:</strong>
+            <ul>
+              <li>Mixed 2px on buttons, 4px on cards, 20px pills on badges.</li>
+              <li>Circular 50% avatars and bullet dots contradicted the sharp editorial brand.</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- After -->
+        <div class="state-panel state-panel--after">
+          <div>
+            <span class="state-tag state-tag--after">After (Rev 4 Canon)</span>
+            <div class="preview-stage">
+              <button class="btn-after-primary">Strict 0 Radius Button</button>
+              <span class="badge-after-square">Square Tag (Radius 0)</span>
+              <div class="avatar-after-square">0 Square</div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span class="marker-after-star">
+                  <!-- Crest Star Glyph -->
+                  <svg class="svg-star" viewBox="0 0 24 24"><polygon points="12,2 15,9 22,9 17,14 19,21 12,17 5,21 7,14 2,9 9,9"/></svg>
+                </span>
+                <span style="font-size:0.85rem; font-weight:600;">Crest star marker (or square)</span>
+              </div>
+            </div>
+          </div>
+          <div class="meta-notes">
+            <strong>Rev 4 Standard:</strong>
+            <ul>
+              <li><code>border-radius: 0</code> on every component. Verified by <code>speccheck</code>.</li>
+              <li>Avatars/photos are square. Markers use the filled crest star glyph (<code>icon-star</code>).</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </article>
+
+
+    <!-- ===================================================================
+         RULING 2: SURFACE MATRIX HOVER STATES
+         =================================================================== -->
+    <article class="ruling-card" id="ruling-hovers">
+      <div class="ruling-header">
+        <div>
+          <span class="ruling-number">Ruling 02</span>
+          <h2 class="ruling-title">Surface Matrix &bull; Hover Comes from the Surface</h2>
+          <p class="ruling-summary">
+            No synthetic hover tints (all <code>--fog-*-hover</code> retired). On light surfaces, primary Fog Blue hovers to Pitch Navy (<code>#00243C</code>).
+          </p>
+        </div>
+      </div>
+
+      <div class="side-by-side">
+        <!-- Before -->
+        <div class="state-panel state-panel--before">
+          <div>
+            <span class="state-tag state-tag--before">Before (Synthetic Tints)</span>
+            <span class="interactive-pill">Hover over buttons to test</span>
+            <div class="preview-stage">
+              <button class="hover-demo-btn btn-before-hover-demo">Primary (Hovers Sky Blue)</button>
+              <button class="hover-demo-btn btn-before-sec-demo">Secondary (Hovers Pale #EBF5FB)</button>
+            </div>
+          </div>
+          <div class="meta-notes">
+            <strong>Legacy Defects:</strong>
+            <ul>
+              <li>Hover states were invented tints (e.g. Light Blue on white fails contrast at 2.85:1).</li>
+              <li>Pale background washes created inconsistent component-scoped colors.</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- After -->
+        <div class="state-panel state-panel--after">
+          <div>
+            <span class="state-tag state-tag--after">After (Surface Matrix)</span>
+            <span class="interactive-pill">Hover over buttons to test</span>
+            <div class="preview-stage">
+              <button class="hover-demo-btn btn-after-hover-primary">Primary (Hovers Fog Dark Navy)</button>
+              <button class="hover-demo-btn btn-after-hover-secondary">Secondary (Hovers Dark Navy Fill)</button>
+            </div>
+          </div>
+          <div class="meta-notes">
+            <strong>Rev 4 Standard:</strong>
+            <ul>
+              <li>Primary button fills with Pitch Navy (<code>#00243C</code>) on hover/press.</li>
+              <li>Secondary button has navy outline, filling with solid navy and white text on hover.</li>
+              <li>Contrast ratio is a massive <strong>15.9:1</strong> (white on Fog Dark Blue).</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </article>
+
+
+    <!-- ===================================================================
+         RULING 3: SURFACES & THE ONE PERMITTED TINT (--fog-gray-50)
+         =================================================================== -->
+    <article class="ruling-card" id="ruling-surfaces">
+      <div class="ruling-header">
+        <div>
+          <span class="ruling-number">Ruling 03</span>
+          <h2 class="ruling-title">Surfaces &bull; One Permitted Tint (<code>--fog-gray-50: #F1F2F3</code>)</h2>
+          <p class="ruling-summary">
+            No second grayscale. Panels and card grounds use <code>--fog-gray-50</code>, where Fog Blue passes contrast at 4.80:1.
+          </p>
+        </div>
+      </div>
+
+      <div class="side-by-side">
+        <!-- Before -->
+        <div class="state-panel state-panel--before">
+          <div>
+            <span class="state-tag state-tag--before">Before (Ad-hoc Grays)</span>
+            <div class="preview-stage">
+              <div class="card-before-sample">
+                <h4 style="font-family: 'Futura PT', sans-serif; font-size:1rem; text-transform:uppercase; margin-bottom:0.25rem;">Ad-hoc Ground (#F8F9FA)</h4>
+                <p style="font-size:0.85rem; color:#666;">Legacy card with 4px radius and unmanaged grey.</p>
+              </div>
+            </div>
+          </div>
+          <div class="meta-notes">
+            <strong>Legacy Defects:</strong>
+            <ul>
+              <li>Stylesheets grew fragmented off-whites (<code>#F8F9FA</code>, <code>#F0F4F8</code>, <code>#E6EAEB</code>).</li>
+              <li>Grey text used arbitrary <code>#666</code> or <code>#555</code> instead of token copy color.</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- After -->
+        <div class="state-panel state-panel--after-grey">
+          <div>
+            <span class="state-tag state-tag--after">After (Canon: --fog-gray-50)</span>
+            <div class="preview-stage">
+              <div class="card-after-sample">
+                <span style="font-size:0.75rem; font-weight:700; color:var(--fog-blue); text-transform:uppercase; letter-spacing:0.05em; display:block;">Card Ground (--fog-gray-50)</span>
+                <h4 style="font-family: var(--font-display); font-size:1rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--fog-dark-blue); margin-bottom:0.25rem;">Clean Editorial Surface</h4>
+                <p style="font-size:0.85rem; color:var(--fog-dark-gray);">Strict 0 radius, 1px hairline border, Fog Blue left indicator.</p>
+              </div>
+            </div>
+          </div>
+          <div class="meta-notes">
+            <strong>Rev 4 Standard:</strong>
+            <ul>
+              <li><code>--fog-gray-50</code> (<code>#F1F2F3</code>) is the sole permitted panel/card tint.</li>
+              <li>Fog Blue on <code>--fog-gray-50</code> passes contrast at <strong>4.80:1</strong>.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </article>
+
+
+    <!-- ===================================================================
+         RULING 4: ACCESSIBLE DOUBLE FOCUS RING
+         =================================================================== -->
+    <article class="ruling-card" id="ruling-focus">
+      <div class="ruling-header">
+        <div>
+          <span class="ruling-number">Ruling 04</span>
+          <h2 class="ruling-title">Accessibility &bull; The Double Focus Ring</h2>
+          <p class="ruling-summary">
+            Replaces the 40% alpha ring (which composited to 1.84:1, failing WCAG) with a high-contrast 2px white / 4px Fog Blue double ring.
+          </p>
+        </div>
+      </div>
+
+      <div class="side-by-side">
+        <!-- Before -->
+        <div class="state-panel state-panel--before">
+          <div>
+            <span class="state-tag state-tag--before">Before (Single Alpha Ring)</span>
+            <div class="preview-stage">
+              <button class="focus-sample focus-sample--old">40% Alpha Ring (1.84:1)</button>
+            </div>
+          </div>
+          <div class="meta-notes">
+            <strong>Legacy Defects:</strong>
+            <ul>
+              <li>40% alpha Fog Blue composited to <code>#99C5E2</code> on white.</li>
+              <li>Contrast ratio was <strong>1.84:1</strong>, severely failing WCAG 3:1 focus-appearance rule.</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- After -->
+        <div class="state-panel state-panel--after">
+          <div>
+            <span class="state-tag state-tag--after">After (Double Ring)</span>
+            <div class="preview-stage">
+              <button class="focus-sample focus-sample--new">Double Ring (Passing AA)</button>
+            </div>
+          </div>
+          <div class="meta-notes">
+            <strong>Rev 4 Standard:</strong>
+            <ul>
+              <li><code>0 0 0 2px var(--fog-white), 0 0 0 4px var(--fog-blue)</code></li>
+              <li>Inner white gap isolates the control, outer Fog Blue boundary provides crisp 5.38:1 contrast.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </article>
+
+
+    <!-- ===================================================================
+         RULING 5: TYPOGRAPHY HIERARCHY
+         =================================================================== -->
+    <article class="ruling-card" id="ruling-typography">
+      <div class="ruling-header">
+        <div>
+          <span class="ruling-number">Ruling 05</span>
+          <h2 class="ruling-title">Typography &bull; Weight by Role (Futura PT)</h2>
+          <p class="ruling-summary">
+            Display 700 (hero) &bull; H1 800 (no hero) &bull; H2 700 &bull; H3 600 (sentence case) &bull; Buttons 700 &bull; Body 400 at 16px.
+          </p>
+        </div>
+      </div>
+
+      <div class="side-by-side">
+        <!-- Before -->
+        <div class="state-panel state-panel--before">
+          <div>
+            <span class="state-tag state-tag--before">Before (Ad-hoc Weights &amp; Negative Tracking)</span>
+            <div class="preview-stage" style="align-items:flex-start;">
+              <div style="font-family:'Futura PT',sans-serif; font-size:1.5rem; font-weight:800; letter-spacing:-0.03em; text-transform:uppercase; color:#00243C;">
+                ALL HEADINGS HEAVY 800
+              </div>
+              <div style="font-family:'Futura PT',sans-serif; font-size:1.1rem; font-weight:800; text-transform:uppercase; color:#006EB6;">
+                H3 ALSO SHOUTING ALL CAPS
+              </div>
+              <p style="font-size:17px; font-weight:500; color:#555;">
+                Body text was 17px at weight 500 with muddy #555 coloring.
+              </p>
+            </div>
+          </div>
+          <div class="meta-notes">
+            <strong>Legacy Defects:</strong>
+            <ul>
+              <li>Negative tracking compressed Futura's natural geometry.</li>
+              <li>H3-H6 were uppercase, causing visual shouting in editorial sections.</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- After -->
+        <div class="state-panel state-panel--after">
+          <div>
+            <span class="state-tag state-tag--after">After (Rev 4 Canon Hierarchy)</span>
+            <div class="preview-stage" style="align-items:flex-start;">
+              <span class="doc-eyebrow" style="color:var(--fog-blue); margin-bottom:0;">EYEBROW 600 &bull; 0.18EM TRACKING</span>
+              <div style="font-family:var(--font-display); font-size:1.5rem; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; line-height:1.05; color:var(--fog-dark-blue);">
+                DISPLAY 700 / H2 700 BOLD
+              </div>
+              <div style="font-family:var(--font-display); font-size:1.15rem; font-weight:600; letter-spacing:0; line-height:1.2; color:var(--fog-dark-blue);">
+                H3 in clean sentence case at Demi 600
+              </div>
+              <p style="font-size:1rem; font-weight:400; line-height:1.6; color:var(--fog-dark-gray);">
+                Body copy is Book 400 at 16px (1rem), no tracking, line-height 1.6, in near-black (<span style="font-weight:700;">#141718</span>).
+              </p>
+            </div>
+          </div>
+          <div class="meta-notes">
+            <strong>Rev 4 Standard:</strong>
+            <ul>
+              <li>Display 700 (hero) / H2 700 with +0.05em tracking and line-height 1.05.</li>
+              <li>H3 in sentence case at Demi 600. Body at 16px (phones never zoom).</li>
+              <li><code>strong</code> is Bold 700 for a word or two, never a full sentence.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </article>
+
+  </div>
+</main>
+
+</body>
+</html>

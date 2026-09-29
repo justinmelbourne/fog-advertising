@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wave 2a-ii Tracking & Gray Surface Mockup — SF Fog RFC</title>
+  <style>
+    @font-face {
+      font-family: "Futura PT";
+      src: url("https://static1.squarespace.com/static/ta/5877fed2893fc0457ba54704/118/assets/fonts/FuturaPTBook.woff2") format("woff2");
+      font-weight: 400;
+    }
+    @font-face {
+      font-family: "Futura PT";
+      src: url("https://static1.squarespace.com/static/ta/5877fed2893fc0457ba54704/118/assets/fonts/FuturaPTDemi.woff2") format("woff2");
+      font-weight: 600;
+    }
+    @font-face {
+      font-family: "Futura PT";
+      src: url("https://static1.squarespace.com/static/ta/5877fed2893fc0457ba54704/118/assets/fonts/FuturaPTBold.woff2") format("woff2");
+      font-weight: 700;
+    }
+    @font-face {
+      font-family: "Futura PT";
+      src: url("https://static1.squarespace.com/static/ta/5877fed2893fc0457ba54704/118/assets/fonts/FuturaPTHeavy.woff2") format("woff2");
+      font-weight: 800;
+    }
+
+    :root {
+      --fog-blue: #006EB6;
+      --fog-light-blue: #24A0F1;
+      --fog-dark-blue: #00243C;
+      --fog-gray: #DCDDDE;
+      --fog-gray-50: #F1F2F3;
+      --fog-dark-gray: #141718;
+      --fog-white: #FFFFFF;
+      --fog-green: #157A38;
+      --fog-red: #C4321F;
+
+      /* Proposed 5 tracking tokens */
+      --tracking-eyebrow: 0.16em;
+      --tracking-label: 0.08em;
+      --tracking-headline: 0.05em;
+      --tracking-body: 0.04em;
+      --tracking-normal: normal;
+
+      --font-display: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+      --font-body: "Futura PT", Futura, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-body);
+      font-size: 16px;
+      line-height: 1.6;
+      color: var(--fog-dark-gray);
+      background: #F4F6F8;
+      padding-bottom: 5rem;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .header-bar {
+      background: var(--fog-dark-blue);
+      color: var(--fog-white);
+      padding: 3rem 2rem 2.5rem;
+      border-bottom: 3px solid var(--fog-blue);
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+    }
+    .eyebrow {
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: var(--tracking-eyebrow);
+      color: var(--fog-light-blue);
+      display: inline-block;
+      margin-bottom: 0.5rem;
+    }
+    h1.page-title {
+      font-family: var(--font-display);
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: var(--tracking-headline);
+      line-height: 1.05;
+      margin-bottom: 0.5rem;
+    }
+
+    .section-card {
+      background: var(--fog-white);
+      border: 1px solid var(--fog-gray);
+      padding: 2.25rem;
+      margin-top: 2.5rem;
+    }
+    .section-title {
+      font-family: var(--font-display);
+      font-size: 1.4rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: var(--tracking-headline);
+      color: var(--fog-dark-blue);
+      margin-bottom: 0.35rem;
+    }
+    .section-desc {
+      color: var(--fog-dark-gray);
+      margin-bottom: 1.75rem;
+      font-size: 0.95rem;
+    }
+
+    /* Comparison Table / Grid */
+    .tracking-row {
+      display: grid;
+      grid-template-columns: 240px 1fr 1fr;
+      gap: 1.5rem;
+      align-items: center;
+      padding: 1.25rem 0;
+      border-bottom: 1px solid var(--fog-gray);
+    }
+    @media (max-width: 900px) {
+      .tracking-row { grid-template-columns: 1fr; gap: 0.75rem; }
+    }
+    .tracking-label-col h4 {
+      font-family: var(--font-display);
+      font-size: 1rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: var(--tracking-headline);
+      color: var(--fog-blue);
+    }
+    .tracking-label-col p {
+      font-size: 0.8rem;
+      color: var(--fog-dark-gray);
+    }
+    .tracking-box {
+      padding: 1rem 1.25rem;
+      background: #F9FAFB;
+      border: 1px solid var(--fog-gray);
+    }
+    .tracking-box--proposed {
+      background: var(--fog-white);
+      border-left: 3px solid var(--fog-blue);
+    }
+    .col-header {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--fog-dark-gray);
+      margin-bottom: 0.5rem;
+      display: block;
+    }
+
+    /* Gray vs Gray-50 Comparison */
+    .gray-comparison-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+      margin-top: 1.5rem;
+    }
+    @media (max-width: 800px) {
+      .gray-comparison-grid { grid-template-columns: 1fr; }
+    }
+    .panel-sample {
+      padding: 2rem;
+      border: 1px solid var(--fog-gray);
+    }
+    .panel-sample--fog-gray {
+      background: var(--fog-gray); /* #DCDDDE */
+    }
+    .panel-sample--fog-gray-50 {
+      background: var(--fog-gray-50); /* #F1F2F3 */
+    }
+    .status-badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 3px 8px;
+      margin-bottom: 1rem;
+      color: #FFF;
+    }
+    .status-badge--fail {
+      background: var(--fog-red);
+    }
+    .status-badge--pass {
+      background: var(--fog-green);
+    }
+  </style>
+</head>
+<body>
+
+<header class="header-bar">
+  <div class="container">
+    <span class="eyebrow">SF Fog RFC Technical &amp; Design Evaluation</span>
+    <h1 class="page-title">Wave 2a-ii Tracking &amp; Surface Mockup</h1>
+    <p style="color: var(--fog-gray); max-width: 800px;">
+      Interactive comparison of the proposed 5-token tracking consolidation and contrast evaluation of <code>--fog-gray</code> vs <code>--fog-gray-50</code>.
+    </p>
+  </div>
+</header>
+
+<main class="container">
+
+  <!-- =====================================================================
+       SECTION 1: TRACKING COMPARISON (TODAY VS PROPOSED 5 TOKENS)
+       ===================================================================== -->
+  <section class="section-card">
+    <h2 class="section-title">Part 1 &bull; Tracking Consolidation (Wave 2a-ii)</h2>
+    <p class="section-desc">
+      Collapsing 22 random <code>letter-spacing</code> values down to 5 semantic role tokens. Below is rendered text in genuine Futura PT showing current drift vs. proposed tokens.
+    </p>
+
+    <!-- Eyebrow Tracking -->
+    <div class="tracking-row">
+      <div class="tracking-label-col">
+        <h4>1. Eyebrow Tracking</h4>
+        <p>Current: 0.14, 0.15, 0.16, 0.18em<br><strong>Proposed: 0.16em</strong></p>
+      </div>
+      <div class="tracking-box">
+        <span class="col-header">Current Drift (e.g. 0.14em vs 0.18em)</span>
+        <span style="display:block; font-size:0.8rem; font-weight:600; text-transform:uppercase; letter-spacing:0.14em; color:var(--fog-blue); margin-bottom:4px;">
+          MATCH HIGHLIGHTS &bull; 0.14EM
+        </span>
+        <span style="display:block; font-size:0.8rem; font-weight:600; text-transform:uppercase; letter-spacing:0.18em; color:var(--fog-blue);">
+          MATCH HIGHLIGHTS &bull; 0.18EM
+        </span>
+      </div>
+      <div class="tracking-box tracking-box--proposed">
+        <span class="col-header">Proposed Token: --tracking-eyebrow (0.16em)</span>
+        <span style="display:block; font-size:0.8rem; font-weight:600; text-transform:uppercase; letter-spacing:0.16em; color:var(--fog-blue);">
+          MATCH HIGHLIGHTS &bull; PERFECT HARMONY (0.16EM)
+        </span>
+      </div>
+    </div>
+
+    <!-- Label / Badge Tracking -->
+    <div class="tracking-row">
+      <div class="tracking-label-col">
+        <h4>2. Label &amp; Tag Tracking</h4>
+        <p>Current: 0.07, 0.08, 0.09, 0.10em<br><strong>Proposed: 0.08em</strong></p>
+      </div>
+      <div class="tracking-box">
+        <span class="col-header">Current Drift (e.g. 0.10em vs 0.07em)</span>
+        <span style="display:inline-block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.10em; background:var(--fog-blue); color:#FFF; padding:2px 6px; margin-right:6px;">
+          BINGHAM CUP &bull; 0.10EM
+        </span>
+        <span style="display:inline-block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; background:var(--fog-dark-blue); color:#FFF; padding:2px 6px;">
+          TRY TIME &bull; 0.07EM
+        </span>
+      </div>
+      <div class="tracking-box tracking-box--proposed">
+        <span class="col-header">Proposed Token: --tracking-label (0.08em)</span>
+        <span style="display:inline-block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; background:var(--fog-blue); color:#FFF; padding:2px 6px; margin-right:6px;">
+          BINGHAM CUP &bull; 0.08EM
+        </span>
+        <span style="display:inline-block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; background:var(--fog-dark-blue); color:#FFF; padding:2px 6px;">
+          TRY TIME &bull; 0.08EM
+        </span>
+      </div>
+    </div>
+
+    <!-- Headline & Button Tracking -->
+    <div class="tracking-row">
+      <div class="tracking-label-col">
+        <h4>3. Headlines &amp; Buttons</h4>
+        <p>Current: 0.05, 0.06em<br><strong>Proposed: 0.05em</strong></p>
+      </div>
+      <div class="tracking-box">
+        <span class="col-header">Current Drift (0.06em vs 0.05em)</span>
+        <button type="button" style="display:inline-block; font-family:var(--font-display); font-size:0.875rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; background:var(--fog-blue); color:#FFF; border:none; padding:8px 16px;">
+          JOIN PRACTICE (0.06EM)
+        </button>
+      </div>
+      <div class="tracking-box tracking-box--proposed">
+        <span class="col-header">Proposed Token: --tracking-headline (0.05em)</span>
+        <button type="button" style="display:inline-block; font-family:var(--font-display); font-size:0.875rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; background:var(--fog-blue); color:#FFF; border:none; padding:8px 16px;">
+          JOIN PRACTICE (0.05EM)
+        </button>
+      </div>
+    </div>
+
+    <!-- Body Tracking -->
+    <div class="tracking-row">
+      <div class="tracking-label-col">
+        <h4>4. Lede / Small Caps Tracking</h4>
+        <p>Current: 0.02, 0.03, 0.04em, 0.5px<br><strong>Proposed: 0.04em</strong></p>
+      </div>
+      <div class="tracking-box">
+        <span class="col-header">Current Drift (0.5px / 0.02em)</span>
+        <p style="font-size:0.9rem; letter-spacing:0.5px; margin:0;">
+          All players of any skill level are welcome.
+        </p>
+      </div>
+      <div class="tracking-box tracking-box--proposed">
+        <span class="col-header">Proposed Token: --tracking-body (0.04em)</span>
+        <p style="font-size:0.9rem; letter-spacing:0.04em; margin:0;">
+          All players of any skill level are welcome.
+        </p>
+      </div>
+    </div>
+
+    <!-- Intentional One-Offs -->
+    <div class="tracking-row" style="border-bottom:none;">
+      <div class="tracking-label-col">
+        <h4>Documented One-Offs</h4>
+        <p>Hero Title: <strong>0.01em</strong><br>404 Error Code: <strong>0.25em</strong></p>
+      </div>
+      <div class="tracking-box" style="grid-column: span 2;">
+        <span class="col-header">Preserved Intentional One-Offs (Not Snapped)</span>
+        <div style="font-family:var(--font-display); font-size:1.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.01em; color:var(--fog-dark-blue); line-height:1.05;">
+          .fog-hero-title: SAN FRANCISCO FOG RUGBY (0.01em tight setting)
+        </div>
+        <div style="font-family:var(--font-display); font-size:1.25rem; font-weight:800; letter-spacing:0.25em; color:var(--fog-red); margin-top:6px;">
+          .fog-404-code: 4 0 4 (0.25em wide spacing)
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+
+  <!-- =====================================================================
+       SECTION 2: CAN WE MERGE --fog-gray-50 INTO --fog-gray?
+       ===================================================================== -->
+  <section class="section-card">
+    <h2 class="section-title">Part 2 &bull; Why We Need <code>--fog-gray-50</code> (The Contrast Law)</h2>
+    <p class="section-desc">
+      You asked: <em>"Can we merge <code>--fog-gray-50</code> into <code>--fog-gray</code>, or is it best practice in modern web design to have tints?"</em>
+      <br><br>
+      Here is the actual rendered visual and WCAG mathematical proof. If we use <code>--fog-gray</code> (<code>#DCDDDE</code>) as a card or panel background, <strong>Fog Blue text fails accessibility (3.95:1 &lt; 4.5:1)</strong> and the card looks like a heavy concrete slab.
+    </p>
+
+    <div class="gray-comparison-grid">
+
+      <!-- If merged into --fog-gray -->
+      <div class="panel-sample panel-sample--fog-gray">
+        <span class="status-badge status-badge--fail">FAILS WCAG AA (3.95:1)</span>
+        <h3 style="font-family:var(--font-display); font-size:1.25rem; font-weight:700; text-transform:uppercase; color:var(--fog-blue); margin-bottom:0.5rem;">
+          Fog Blue Headline on --fog-gray (#DCDDDE)
+        </h3>
+        <p style="font-size:0.9rem; color:var(--fog-dark-gray); margin-bottom:1rem;">
+          This background is <code>#DCDDDE</code>. Fog Blue text on this background has a contrast ratio of <strong>3.95:1</strong>. WCAG AA requires at least <strong>4.5:1</strong> for normal text. It is illegal for public accessibility compliance.
+        </p>
+        <a href="#" style="color:var(--fog-blue); font-weight:700; font-size:0.875rem;">Blue link fails contrast on this ground &rarr;</a>
+        <div style="margin-top:1.25rem; padding:0.75rem; background:rgba(0,0,0,0.06); font-size:0.8rem;">
+          <strong>Visual result:</strong> Heavy, muddy "concrete slab" look. Doesn't feel like modern web design.
+        </div>
+      </div>
+
+      <!-- With --fog-gray-50 tint -->
+      <div class="panel-sample panel-sample--fog-gray-50" style="border-left: 4px solid var(--fog-blue);">
+        <span class="status-badge status-badge--pass">PASSES WCAG AA (4.80:1)</span>
+        <h3 style="font-family:var(--font-display); font-size:1.25rem; font-weight:700; text-transform:uppercase; color:var(--fog-blue); margin-bottom:0.5rem;">
+          Fog Blue Headline on --fog-gray-50 (#F1F2F3)
+        </h3>
+        <p style="font-size:0.9rem; color:var(--fog-dark-gray); margin-bottom:1rem;">
+          This background is <code>#F1F2F3</code>. Fog Blue text on this background has a contrast ratio of <strong>4.80:1</strong>, cleanly passing WCAG AA.
+        </p>
+        <a href="#" style="color:var(--fog-blue); font-weight:700; font-size:0.875rem;">Blue link cleanly readable &rarr;</a>
+        <div style="margin-top:1.25rem; padding:0.75rem; background:rgba(0,0,0,0.04); font-size:0.8rem;">
+          <strong>Visual result:</strong> Crisp, airy editorial card ground. Industry standard (Stripe, Apple, Tailwind).
+        </div>
+      </div>
+
+    </div>
+
+    <div style="margin-top:2rem; padding:1.25rem; background:#F8F9FA; border-left:4px solid var(--fog-dark-blue); font-size:0.9rem;">
+      <strong>Industry Best Practice Summary:</strong>
+      All modern design systems (Tailwind, Stripe, Apple HIG, GitHub Primer) use a "Level 50" tint (95–98% luminance) for panel surfaces and cards. 
+      <code>--fog-gray</code> (<code>#DCDDDE</code>) is reserved for <strong>borders, hairlines, and badges</strong>. <code>--fog-gray-50</code> (<code>#F1F2F3</code>) is the <strong>card &amp; panel ground</strong>.
+    </div>
+  </section>
+
+</main>
+
+</body>
+</html>

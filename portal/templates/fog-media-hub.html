@@ -80,6 +80,25 @@
 
       <p class="fog-analysis-bar__status" id="veo-ingest-status" hidden></p>
 
+      <div class="fog-tracker-card" id="veo-tracker" hidden aria-live="polite">
+        <div class="fog-tracker-card__header">
+          <div>
+            <span class="fog-tracker-card__badge" id="tracker-stage-badge">Streaming</span>
+            <h3 class="fog-tracker-card__title" id="tracker-title">Importing Match...</h3>
+          </div>
+          <span class="fog-tracker-card__pct" id="tracker-pct">0%</span>
+        </div>
+
+        <div class="fog-tracker-card__track">
+          <div class="fog-tracker-card__fill" id="tracker-bar"></div>
+        </div>
+
+        <div class="fog-tracker-card__meta">
+          <span id="tracker-status-text">Connecting to Veo CDN...</span>
+          <span id="tracker-metrics">0 MB / 0 MB</span>
+        </div>
+      </div>
+
       <div class="moment-grid" id="veo-recordings-grid" role="list" aria-label="Club Veo recordings">
         <!-- Populated dynamically by fog-media-hub.js -->
       </div>
