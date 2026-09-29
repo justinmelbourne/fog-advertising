@@ -3,7 +3,7 @@ import re
 from typing import List, Optional, Any
 from engine.models import Event
 
-VEO_URL_PATTERN = re.compile(r"(?:app\.veo\.co/matches/)?([a-zA-Z0-9\-]+)")
+VEO_URL_PATTERN = re.compile(r"(?:https?://)?app\.veo\.co/matches/([a-zA-Z0-9\-]+)")
 
 def parse_veo_email_body(body_text: str) -> Optional[str]:
     """Extract match slug or UUID from an automated Veo notification email or string."""
@@ -44,7 +44,12 @@ def parse_veo_highlights(highlights: List[dict], source_id: str = "veo_main") ->
             suggested = ["general_highlight"]
 
         start = float(hl.get("start", 0))
-        duration = float(hl.get("duration", 20))
+        if "duration" in hl and hl["duration"] is not None:
+            duration = float(hl["duration"])
+        elif "end" in hl and hl["end"] is not None:
+            duration = float(hl["end"]) - start
+        else:
+            duration = 20.0
         end = start + duration
 
         label = hl.get("comment") or (", ".join(tag_names) if tag_names else f"Veo AI {event_type.title()}")
@@ -66,12 +71,14 @@ def parse_veo_highlights(highlights: List[dict], source_id: str = "veo_main") ->
 
 def fetch_veo_match_events(match_id: str, source_id: str, client: Any) -> List[Event]:
     """Ingest AI-tagged events from Veo match data."""
-    if hasattr(client, "get_match_highlights"):
-        highlights = client.get_match_highlights(match_id)
-    elif hasattr(client, "get_match_data"):
+    highlights = []
+    if "get_match_data" in client.__dict__ or hasattr(client, "get_match_data"):
         data = client.get_match_data(match_id)
-        highlights = data.get("highlights", [])
-    else:
-        highlights = []
+        if isinstance(data, dict):
+            highlights = data.get("highlights", [])
+    elif hasattr(client, "get_match_highlights"):
+        res = client.get_match_highlights(match_id)
+        if isinstance(res, list):
+            highlights = res
 
     return parse_veo_highlights(highlights, source_id=source_id)

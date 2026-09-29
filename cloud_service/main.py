@@ -241,7 +241,8 @@ def _process_veo_ingest_job(job_id: str, slug: str, match_title: str, client: Ve
                     drive_file_id=drive_file_id,
                     resolution=f"{details.get('width', 1920)}x{details.get('height', 1080)}",
                     fps=30.0,
-                    duration=0.0,
+                    duration_seconds=float(details.get("duration", 0.0)),
+                    camera_type="veo",
                 )
             ],
             events=enriched_events,

@@ -5,10 +5,12 @@ from pydantic import BaseModel, Field
 class VideoSource(BaseModel):
     source_id: str
     filename: str
-    duration_seconds: float
-    resolution: str
-    fps: float
-    camera_type: str = Field(description="'veo' or 'phone'")
+    duration_seconds: float = 0.0
+    resolution: str = "1920x1080"
+    fps: float = 30.0
+    camera_type: str = Field(default="veo", description="'veo' or 'phone'")
+    drive_file_id: Optional[str] = None
+    label: Optional[str] = None
 
 class PairingSuggestion(BaseModel):
     paired_event_id: str
