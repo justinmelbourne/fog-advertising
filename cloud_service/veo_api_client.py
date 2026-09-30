@@ -222,3 +222,91 @@ class VeoApiClient:
             "highlights_count": len(highlights),
             "highlights": highlights,
         }
+
+    def restore_match(self, match_id_or_slug: str) -> dict[str, Any]:
+        """
+        Request AWS Glacier cold-storage unarchiving for an expired match.
+        Requires Club Administrator token.
+        Returns:
+            {"match_id": ident, "status": "restoring", "status_code": 202, ...}
+        """
+        ident = self.parse_slug_or_id(match_id_or_slug)
+        url = f"{VEO_APP_API_BASE}/matches/{ident}/videos/restore/"
+        try:
+            resp = self._session.post(url, json={}, timeout=DEFAULT_TIMEOUT)
+            if resp.status_code in (200, 202):
+                return {
+                    "match_id": ident,
+                    "status": "restoring",
+                    "status_code": resp.status_code,
+                    "message": "Glacier archive restoration requested (typically takes 3–12 hours).",
+                }
+            resp.raise_for_status()
+            return {"match_id": ident, "status": "unknown", "status_code": resp.status_code}
+        except requests.HTTPError as http_err:
+            status_code = resp.status_code if "resp" in locals() and resp is not None else 500
+            logger.warning("Failed to restore match %s: %s (HTTP %s)", ident, http_err, status_code)
+            return {
+                "match_id": ident,
+                "status": "error",
+                "status_code": status_code,
+                "error": str(http_err),
+            }
+        except Exception as exc:
+            logger.exception("Unexpected error restoring match %s: %s", ident, exc)
+            return {
+                "match_id": ident,
+                "status": "error",
+                "status_code": 500,
+                "error": str(exc),
+            }
+
+    def check_glacier_status(self, match_id_or_slug: str) -> dict[str, Any]:
+        """
+        Checks if a Glacier-restoring match has completed unarchiving and is ready to download.
+        Calls Veo's POST /matches/{id}/download-video/ endpoint.
+        Returns:
+            {"status": "ready", "download_url": "...", "status_code": 200} when ready
+            {"status": "restoring", "status_code": 403, "message": "..."} when pending
+        """
+        ident = self.parse_slug_or_id(match_id_or_slug)
+        url = f"{VEO_APP_API_BASE}/matches/{ident}/download-video/"
+        try:
+            resp = self._session.post(url, json={}, timeout=DEFAULT_TIMEOUT)
+            if resp.status_code == 200:
+                raw_text = resp.text.strip()
+                download_url = ""
+                if raw_text.startswith("{") or raw_text.startswith("["):
+                    data = resp.json()
+                    download_url = data.get("url") if isinstance(data, dict) else str(data)
+                else:
+                    download_url = raw_text.strip('"')
+                return {
+                    "match_id": ident,
+                    "status": "ready",
+                    "status_code": 200,
+                    "download_url": download_url,
+                    "message": "Video has been restored from AWS Glacier and is ready for download.",
+                }
+            elif resp.status_code == 403:
+                return {
+                    "match_id": ident,
+                    "status": "restoring",
+                    "status_code": 403,
+                    "message": "Footage is currently unarchiving in AWS Glacier (typically takes 3–12 hours).",
+                }
+            else:
+                return {
+                    "match_id": ident,
+                    "status": "pending",
+                    "status_code": resp.status_code,
+                    "message": f"Veo returned status {resp.status_code}",
+                }
+        except Exception as exc:
+            logger.warning("Error checking Glacier status for %s: %s", ident, exc)
+            return {
+                "match_id": ident,
+                "status": "error",
+                "error": str(exc),
+            }
+

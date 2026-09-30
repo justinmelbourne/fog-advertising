@@ -75,3 +75,38 @@ def test_veo_api_client_pagination_and_expiration():
     assert recs[1]["is_expiring_soon"] is False
     assert recs[1]["is_expired"] is True
 
+
+def test_veo_api_client_restore_and_glacier_check():
+    from cloud_service.veo_api_client import VeoApiClient
+    client = VeoApiClient(token="test_token")
+
+    # 1. Test restore initiation (HTTP 202)
+    mock_restore_resp = MagicMock()
+    mock_restore_resp.status_code = 202
+    client._session.post = MagicMock(return_value=mock_restore_resp)
+
+    res = client.restore_match("22278277-604e-4d7b-a18b-d0973656425b")
+    assert res["status"] == "restoring"
+    assert res["status_code"] == 202
+
+    # 2. Test Glacier check while still unarchiving (HTTP 403)
+    mock_check_pending = MagicMock()
+    mock_check_pending.status_code = 403
+    client._session.post = MagicMock(return_value=mock_check_pending)
+
+    status_pending = client.check_glacier_status("22278277-604e-4d7b-a18b-d0973656425b")
+    assert status_pending["status"] == "restoring"
+    assert status_pending["status_code"] == 403
+
+    # 3. Test Glacier check when complete and ready (HTTP 200)
+    mock_check_ready = MagicMock()
+    mock_check_ready.status_code = 200
+    mock_check_ready.text = "https://download.veocdn.com/5fbc/video.mp4"
+    client._session.post = MagicMock(return_value=mock_check_ready)
+
+    status_ready = client.check_glacier_status("22278277-604e-4d7b-a18b-d0973656425b")
+    assert status_ready["status"] == "ready"
+    assert status_ready["status_code"] == 200
+    assert "download.veocdn.com" in status_ready["download_url"]
+
+

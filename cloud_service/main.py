@@ -221,6 +221,51 @@ def list_veo_recordings() -> Response:
         return jsonify({"error": str(exc)}), 500
 
 
+# ---------------------------------------------------------------------------
+# POST /veo/restore
+# Requests unarchiving of an expired match video from AWS Glacier.
+# ---------------------------------------------------------------------------
+
+@app.route("/veo/restore", methods=["POST"])
+def restore_veo_match() -> Response:
+    try:
+        data = request.get_json(silent=True) or {}
+        match_id = data.get("match_id") or data.get("slug") or request.args.get("match_id", "")
+        if not match_id:
+            return jsonify({"error": "Missing match_id"}), 400
+
+        token = request.headers.get("X-Veo-Token") or data.get("token") or os.environ.get("VEO_API_TOKEN", "")
+        client = VeoApiClient(token=token)
+        res = client.restore_match(match_id)
+        status_code = 202 if res.get("status") == "restoring" else 200 if res.get("status") == "ready" else 400
+        return jsonify(res), status_code
+    except Exception as exc:
+        logger.exception("Failed to restore Veo match: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# GET / POST /veo/restore/check
+# Checks whether an AWS Glacier restoration has finished unarchiving.
+# ---------------------------------------------------------------------------
+
+@app.route("/veo/restore/check", methods=["GET", "POST"])
+def check_veo_glacier_status() -> Response:
+    try:
+        data = request.get_json(silent=True) or {}
+        match_id = request.args.get("match_id") or data.get("match_id") or data.get("slug", "")
+        if not match_id:
+            return jsonify({"error": "Missing match_id parameter"}), 400
+
+        token = request.headers.get("X-Veo-Token") or data.get("token") or os.environ.get("VEO_API_TOKEN", "")
+        client = VeoApiClient(token=token)
+        res = client.check_glacier_status(match_id)
+        return jsonify(res), 200
+    except Exception as exc:
+        logger.exception("Failed to check Glacier status: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/veo/backup-expiring", methods=["POST"])
 def backup_expiring_matches() -> Response:
     """
