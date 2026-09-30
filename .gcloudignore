@@ -1,0 +1,14 @@
+.gcloudignore
+.git
+.gitignore
+.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+output_clips/
+*.mp4
+*.wav
+*.mov
+Bingham 2026/
+tests/

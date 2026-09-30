@@ -41,6 +41,7 @@ steps:
       - '--timeout=600'
       - '--concurrency=10'
       - '--max-instances=5'
+      - '--session-affinity'
       - '--set-env-vars=GOOGLE_CLOUD_PROJECT=sffog-video-analysis'
       - '--set-secrets=GEMINI_API_KEY=gemini-api-key:latest,VEO_API_TOKEN=veo-api-token:latest,DRIVE_INGEST_FOLDER_ID=drive-ingest-folder-id:latest,DRIVE_OUTPUT_FOLDER_ID=drive-output-folder-id:latest'
       - '--allow-unauthenticated'

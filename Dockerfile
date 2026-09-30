@@ -28,8 +28,8 @@ EXPOSE 8080
 
 # Use gunicorn for production WSGI serving
 CMD exec gunicorn --bind "0.0.0.0:${PORT}" \
-    --workers 2 \
-    --threads 4 \
+    --workers 1 \
+    --threads 8 \
     --timeout 600 \
     --access-logfile - \
     --error-logfile - \

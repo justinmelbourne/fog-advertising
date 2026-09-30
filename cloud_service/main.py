@@ -27,17 +27,52 @@ Environment Variables (set via Secret Manager in Cloud Run):
   VEO_API_TOKEN            - Optional Veo API bearer token (for private recordings)
 """
 
-import os
-import uuid
+import json
 import logging
+import os
 import threading
 import time
+import uuid
+from pathlib import Path
 from typing import Any, Optional
 
 from flask import Flask, jsonify, request, Response
 
-# In-memory job registry for real-time progress tracking
+# Persistent and in-memory job registry for real-time progress tracking
 JOBS: dict[str, dict[str, Any]] = {}
+JOBS_FILE = Path("/tmp/fog_jobs.json")
+_jobs_lock = threading.Lock()
+
+
+def _save_job(job_id: str, data: dict[str, Any]) -> None:
+    with _jobs_lock:
+        JOBS[job_id] = data
+        try:
+            all_jobs = {}
+            if JOBS_FILE.exists():
+                with open(JOBS_FILE, "r") as f:
+                    all_jobs = json.load(f)
+            all_jobs[job_id] = data
+            with open(JOBS_FILE, "w") as f:
+                json.dump(all_jobs, f)
+        except Exception:
+            pass
+
+
+def _get_job(job_id: str) -> Optional[dict[str, Any]]:
+    with _jobs_lock:
+        if job_id in JOBS:
+            return JOBS[job_id]
+        if JOBS_FILE.exists():
+            try:
+                with open(JOBS_FILE, "r") as f:
+                    all_jobs = json.load(f)
+                if job_id in all_jobs:
+                    JOBS[job_id] = all_jobs[job_id]
+                    return all_jobs[job_id]
+            except Exception:
+                pass
+        return None
 
 # Local engine imports (bundled in same container image)
 from engine.models import Manifest, VideoSource, Event
@@ -206,8 +241,8 @@ def get_veo_match(match_id_or_slug: str) -> Response:
 
 # ---------------------------------------------------------------------------
 # POST /veo/ingest
-def _process_veo_ingest_job(job_id: str, slug: str, match_title: str, client: VeoApiClient) -> None:
-    job = JOBS.get(job_id)
+def _process_veo_ingest_job(job_id: str, slug: str, match_title: str, client: VeoApiClient, force: bool = False) -> None:
+    job = _get_job(job_id)
     if not job:
         return
     start_time = time.time()
@@ -216,12 +251,14 @@ def _process_veo_ingest_job(job_id: str, slug: str, match_title: str, client: Ve
         job["stage_description"] = "Connecting to Veo API & resolving match video stream..."
         job["progress_pct"] = 5
         job["updated_at"] = time.time()
+        _save_job(job_id, job)
 
         details = client.resolve_match_details(slug)
         if not details or not details.get("video_url"):
             job["stage"] = "error"
             job["error"] = f"Could not resolve video URL for match: {slug}"
             job["updated_at"] = time.time()
+            _save_job(job_id, job)
             return
 
         video_url = details["video_url"]
@@ -231,56 +268,83 @@ def _process_veo_ingest_job(job_id: str, slug: str, match_title: str, client: Ve
         events = parse_veo_highlights(details.get("highlights", []), source_id="veo_main")
         enriched_events = generate_clip_pairings(events)
         job["events_count"] = len(enriched_events)
-        job["stage"] = "streaming"
-        job["stage_description"] = f"Streaming 1080p video from Veo CDN to Google Drive ({len(enriched_events)} events detected)..."
-        job["progress_pct"] = 10
         job["updated_at"] = time.time()
+        _save_job(job_id, job)
 
         drive = DriveClient()
-        last_time = time.time()
-        last_bytes = 0
+        drive_file_id = None
 
-        def on_stream_progress(bytes_uploaded: int, total_bytes: int) -> None:
-            nonlocal last_time, last_bytes
-            now = time.time()
-            elapsed = now - last_time
-            if elapsed >= 0.5 or bytes_uploaded == total_bytes:
-                delta_bytes = bytes_uploaded - last_bytes if bytes_uploaded > last_bytes else 0
-                speed_bps = delta_bytes / max(elapsed, 0.001)
-                speed_mbps = round((speed_bps * 8) / (1024 * 1024), 1)
+        # If not forcing re-download, check if 1080p video already exists in Drive Ingest folder
+        if not force:
+            downloaded_map = drive.list_downloaded_videos_map()
+            existing_info = downloaded_map.get(slug) or downloaded_map.get(filename)
+            if not existing_info:
+                for k, v in downloaded_map.items():
+                    if (slug and slug in k) or (filename and filename in k):
+                        existing_info = v
+                        break
+            if existing_info and existing_info.get("file_id"):
+                drive_file_id = existing_info["file_id"]
+                logger.info("Video %s already exists in Drive (file_id=%s). Skipping download.", filename, drive_file_id)
+                job["stage"] = "analyzing"
+                job["stage_description"] = f"Video already in Google Drive. Generating {len(enriched_events)} rugby moment pairings..."
+                job["progress_pct"] = 90
+                job["updated_at"] = time.time()
+                _save_job(job_id, job)
 
-                pct_stream = (bytes_uploaded / total_bytes) if total_bytes > 0 else 0
-                overall_pct = min(90, int(10 + pct_stream * 80))
+        if not drive_file_id:
+            job["stage"] = "streaming"
+            job["stage_description"] = f"Streaming 1080p video from Veo CDN to Google Drive ({len(enriched_events)} events detected)..."
+            job["progress_pct"] = 10
+            job["updated_at"] = time.time()
+            _save_job(job_id, job)
 
-                mb_uploaded = round(bytes_uploaded / (1024 * 1024), 1)
-                mb_total = round(total_bytes / (1024 * 1024), 1)
-                eta_s = int((total_bytes - bytes_uploaded) / max(speed_bps, 1)) if total_bytes > bytes_uploaded else 0
+            last_time = time.time()
+            last_bytes = 0
 
-                job["progress_pct"] = overall_pct
-                job["bytes_uploaded"] = bytes_uploaded
-                job["total_bytes"] = total_bytes
-                job["mb_uploaded"] = mb_uploaded
-                job["mb_total"] = mb_total
-                job["speed_mbps"] = speed_mbps
-                job["eta_seconds"] = eta_s
-                job["stage_description"] = (
-                    f"Streaming to Google Drive: {mb_uploaded} MB / {mb_total} MB "
-                    f"({int(pct_stream * 100)}%) • {speed_mbps} Mbps"
-                )
-                job["updated_at"] = now
-                last_time = now
-                last_bytes = bytes_uploaded
+            def on_stream_progress(bytes_uploaded: int, total_bytes: int) -> None:
+                nonlocal last_time, last_bytes
+                now = time.time()
+                elapsed = now - last_time
+                if elapsed >= 0.5 or bytes_uploaded == total_bytes:
+                    delta_bytes = bytes_uploaded - last_bytes if bytes_uploaded > last_bytes else 0
+                    speed_bps = delta_bytes / max(elapsed, 0.001)
+                    speed_mbps = round((speed_bps * 8) / (1024 * 1024), 1)
 
-        drive_file_id = drive.stream_url_to_folder(
-            download_url=video_url,
-            filename=filename,
-            progress_callback=on_stream_progress,
-        )
+                    pct_stream = (bytes_uploaded / total_bytes) if total_bytes > 0 else 0
+                    overall_pct = min(90, int(10 + pct_stream * 80))
+
+                    mb_uploaded = round(bytes_uploaded / (1024 * 1024), 1)
+                    mb_total = round(total_bytes / (1024 * 1024), 1)
+                    eta_s = int((total_bytes - bytes_uploaded) / max(speed_bps, 1)) if total_bytes > bytes_uploaded else 0
+
+                    job["progress_pct"] = overall_pct
+                    job["bytes_uploaded"] = bytes_uploaded
+                    job["total_bytes"] = total_bytes
+                    job["mb_uploaded"] = mb_uploaded
+                    job["mb_total"] = mb_total
+                    job["speed_mbps"] = speed_mbps
+                    job["eta_seconds"] = eta_s
+                    job["stage_description"] = (
+                        f"Streaming to Google Drive: {mb_uploaded} MB / {mb_total} MB "
+                        f"({int(pct_stream * 100)}%) • {speed_mbps} Mbps"
+                    )
+                    job["updated_at"] = now
+                    last_time = now
+                    last_bytes = bytes_uploaded
+                    _save_job(job_id, job)
+
+            drive_file_id = drive.stream_url_to_folder(
+                download_url=video_url,
+                filename=filename,
+                progress_callback=on_stream_progress,
+            )
 
         job["stage"] = "analyzing"
         job["progress_pct"] = 92
         job["stage_description"] = "Assembling match manifest and saving to Google Drive..."
         job["updated_at"] = time.time()
+        _save_job(job_id, job)
 
         # Construct and save manifest to Google Drive
         manifest = Manifest(
@@ -309,6 +373,7 @@ def _process_veo_ingest_job(job_id: str, slug: str, match_title: str, client: Ve
         job["manifest"] = manifest.model_dump()
         job["drive_file_id"] = drive_file_id
         job["updated_at"] = time.time()
+        _save_job(job_id, job)
         logger.info("Ingest job %s finished in %.1fs", job_id, time.time() - start_time)
 
     except Exception as exc:
@@ -316,6 +381,7 @@ def _process_veo_ingest_job(job_id: str, slug: str, match_title: str, client: Ve
         job["stage"] = "error"
         job["error"] = str(exc)
         job["updated_at"] = time.time()
+        _save_job(job_id, job)
 
 
 # ---------------------------------------------------------------------------
@@ -357,9 +423,9 @@ def ingest_veo_match() -> Response:
             logger.warning("Error checking for existing manifest for %s: %s", slug, e)
 
     job_id = uuid.uuid4().hex[:8]
-    logger.info("Starting background Veo ingest job %s for match: %s", job_id, slug)
+    logger.info("Starting background Veo ingest job %s for match: %s (force=%s)", job_id, slug, force)
 
-    JOBS[job_id] = {
+    initial_job_data = {
         "job_id": job_id,
         "match_id": slug,
         "title": match_title,
@@ -379,10 +445,11 @@ def ingest_veo_match() -> Response:
         "created_at": time.time(),
         "updated_at": time.time(),
     }
+    _save_job(job_id, initial_job_data)
 
     thread = threading.Thread(
         target=_process_veo_ingest_job,
-        args=(job_id, slug, match_title, client),
+        args=(job_id, slug, match_title, client, force),
         daemon=True,
     )
     thread.start()
@@ -403,7 +470,7 @@ def ingest_veo_match() -> Response:
 
 @app.route("/jobs/<job_id>", methods=["GET"])
 def get_job_status(job_id: str) -> Response:
-    job = JOBS.get(job_id)
+    job = _get_job(job_id)
     if not job:
         return jsonify({"error": f"Job {job_id} not found"}), 404
     return jsonify(job)
