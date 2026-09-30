@@ -62,37 +62,98 @@ class VeoApiClient:
         return cleaned
 
     def list_club_recordings(
-        self, club_slug: str = DEFAULT_CLUB_SLUG, limit: int = 50
+        self,
+        club_slug: str = DEFAULT_CLUB_SLUG,
+        fetch_all: bool = True,
+        max_pages: int = 10,
+        page: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         """
-        Fetch all recent match recordings for the club from app.veo.co.
-        Returns parsed list with title, slug, identifier, start date, duration, thumbnail.
+        Fetch match recordings for the club from app.veo.co.
+        Supports multi-page pagination (all pages 1..N) and extracts expiration status.
         """
         url = f"{VEO_APP_API_BASE}/clubs/{club_slug}/recordings/"
-        params = {
-            "filter": "own",
-            "fields": [
-                "identifier",
-                "slug",
-                "title",
-                "created",
-                "start",
-                "duration",
-                "thumbnail",
-                "url",
-                "processing_status",
-            ],
-        }
-        try:
-            resp = self._session.get(url, params=params, timeout=DEFAULT_TIMEOUT)
-            resp.raise_for_status()
-            data = resp.json()
-            items = data if isinstance(data, list) else data.get("results", [])
-            logger.info("Retrieved %d recordings from Veo for club %s", len(items), club_slug)
-            return items
-        except Exception as exc:
-            logger.exception("Failed to list Veo club recordings: %s", exc)
-            return []
+        fields = [
+            "identifier",
+            "slug",
+            "title",
+            "created",
+            "start",
+            "duration",
+            "thumbnail",
+            "url",
+            "processing_status",
+            "expires_at",
+            "expiration_status",
+            "time_to_expiry",
+        ]
+
+        def _fetch_single_page(p: int) -> list[dict[str, Any]]:
+            params = {
+                "filter": "own",
+                "fields": fields,
+                "page": p,
+            }
+            try:
+                resp = self._session.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+                if resp.status_code == 404:
+                    return []
+                resp.raise_for_status()
+                data = resp.json()
+                items = data if isinstance(data, list) else data.get("results", [])
+                return items if isinstance(items, list) else []
+            except Exception as exc:
+                logger.warning("Error fetching Veo recordings page %d for %s: %s", p, club_slug, exc)
+                return []
+
+        all_raw: list[dict[str, Any]] = []
+
+        if page is not None or not fetch_all:
+            target_page = page if page is not None else 1
+            all_raw = _fetch_single_page(target_page)
+        else:
+            for p in range(1, max_pages + 1):
+                page_items = _fetch_single_page(p)
+                if not page_items:
+                    break
+                all_raw.extend(page_items)
+                if len(page_items) < 20:
+                    break
+
+        seen_ids = set()
+        parsed: list[dict[str, Any]] = []
+
+        for it in all_raw:
+            ident = it.get("identifier") or it.get("slug")
+            if not ident or ident in seen_ids:
+                continue
+            seen_ids.add(ident)
+
+            # Analyze expiration fields
+            exp_status = it.get("expiration_status") or ""
+            time_to = it.get("time_to_expiry") or {}
+            time_val = time_to.get("value") if isinstance(time_to, dict) else None
+            time_unit = time_to.get("unit") if isinstance(time_to, dict) else ""
+
+            is_expired = (exp_status == "expired") or (time_unit == "days" and time_val is not None and time_val <= 0)
+            is_expiring_soon = (
+                not is_expired
+                and (
+                    exp_status == "expires-soon"
+                    or (time_unit == "days" and time_val is not None and 0 < time_val <= 60)
+                )
+            )
+
+            it["is_expired"] = is_expired
+            it["is_expiring_soon"] = is_expiring_soon
+            it["days_until_expiry"] = time_val if time_unit == "days" else None
+            parsed.append(it)
+
+        logger.info("Retrieved %d unique recordings from Veo for club %s (expiring_soon=%d, expired=%d)",
+                    len(parsed), club_slug,
+                    sum(1 for x in parsed if x.get("is_expiring_soon")),
+                    sum(1 for x in parsed if x.get("is_expired")))
+        return parsed
 
     def get_match_videos(self, match_slug_or_id: str) -> list[dict[str, Any]]:
         """

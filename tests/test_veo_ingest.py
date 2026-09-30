@@ -39,3 +39,39 @@ def test_fetch_veo_match_events():
     assert events[0].event_type == "try"
     assert events[0].start_time == 840.0
     assert events[0].duration == 25.0
+
+
+def test_veo_api_client_pagination_and_expiration():
+    from cloud_service.veo_api_client import VeoApiClient
+    client = VeoApiClient()
+    mock_resp_p1 = MagicMock()
+    mock_resp_p1.status_code = 200
+    mock_resp_p1.json.return_value = [
+        {
+            "identifier": "id_1",
+            "slug": "match-1",
+            "title": "Match 1",
+            "expiration_status": "expires-soon",
+            "time_to_expiry": {"unit": "days", "value": 26},
+        },
+        {
+            "identifier": "id_2",
+            "slug": "match-2",
+            "title": "Match 2",
+            "expiration_status": "expired",
+            "time_to_expiry": {"unit": "days", "value": -10},
+        },
+    ]
+
+    mock_resp_p2 = MagicMock()
+    mock_resp_p2.status_code = 404
+
+    client._session.get = MagicMock(side_effect=[mock_resp_p1, mock_resp_p2])
+    recs = client.list_club_recordings(fetch_all=True)
+    assert len(recs) == 2
+    assert recs[0]["is_expiring_soon"] is True
+    assert recs[0]["is_expired"] is False
+    assert recs[0]["days_until_expiry"] == 26
+    assert recs[1]["is_expiring_soon"] is False
+    assert recs[1]["is_expired"] is True
+
