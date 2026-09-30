@@ -13,7 +13,7 @@ steps:
     args:
       - 'build'
       - '-t'
-      - 'us-west1-docker.pkg.dev/sffog-video-analysis/fog-video/fog-video-analysis:$COMMIT_SHA'
+      - 'us-west1-docker.pkg.dev/sffog-video-analysis/fog-video/fog-video-analysis:$_COMMIT_SHA'
       - '-t'
       - 'us-west1-docker.pkg.dev/sffog-video-analysis/fog-video/fog-video-analysis:latest'
       - '.'
@@ -32,7 +32,7 @@ steps:
       - 'run'
       - 'deploy'
       - 'fog-video-analysis'
-      - '--image=us-west1-docker.pkg.dev/sffog-video-analysis/fog-video/fog-video-analysis:$COMMIT_SHA'
+      - '--image=us-west1-docker.pkg.dev/sffog-video-analysis/fog-video/fog-video-analysis:$_COMMIT_SHA'
       - '--region=us-west1'
       - '--platform=managed'
       - '--service-account=fog-video-sa@sffog-video-analysis.iam.gserviceaccount.com'
@@ -46,11 +46,11 @@ steps:
       - '--allow-unauthenticated'
 
 images:
-  - 'us-west1-docker.pkg.dev/sffog-video-analysis/fog-video/fog-video-analysis:$COMMIT_SHA'
+  - 'us-west1-docker.pkg.dev/sffog-video-analysis/fog-video/fog-video-analysis:$_COMMIT_SHA'
   - 'us-west1-docker.pkg.dev/sffog-video-analysis/fog-video/fog-video-analysis:latest'
 
 options:
   logging: CLOUD_LOGGING_ONLY
 
 substitutions:
-  COMMIT_SHA: 'manual'
+  _COMMIT_SHA: 'manual'
