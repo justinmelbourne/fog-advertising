@@ -63,7 +63,7 @@ class DriveClient:
         if existing_id:
             file = (
                 self._service.files()
-                .update(fileId=existing_id, media_body=media)
+                .update(fileId=existing_id, media_body=media, supportsAllDrives=True)
                 .execute()
             )
             logger.info("Updated manifest: %s (%s)", filename, file["id"])
@@ -75,7 +75,7 @@ class DriveClient:
             }
             file = (
                 self._service.files()
-                .create(body=metadata, media_body=media, fields="id")
+                .create(body=metadata, media_body=media, fields="id", supportsAllDrives=True)
                 .execute()
             )
             logger.info("Created manifest: %s (%s)", filename, file["id"])
@@ -92,7 +92,7 @@ class DriveClient:
         fh = io.BytesIO()
         downloader = MediaIoBaseDownload(
             fh,
-            self._service.files().get_media(fileId=file_id),
+            self._service.files().get_media(fileId=file_id, supportsAllDrives=True),
         )
         done = False
         while not done:
@@ -114,6 +114,9 @@ class DriveClient:
                 self._service.files()
                 .list(
                     q=query,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    corpora="allDrives",
                     spaces="drive",
                     fields="nextPageToken, files(id, name)",
                     pageToken=page_token,
@@ -145,6 +148,9 @@ class DriveClient:
                 self._service.files()
                 .list(
                     q=query,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    corpora="allDrives",
                     spaces="drive",
                     fields="nextPageToken, files(id, name, size)",
                     pageToken=page_token,
@@ -155,11 +161,38 @@ class DriveClient:
             for f in resp.get("files", []):
                 name = f.get("name", "")
                 mid = name
-                for suffix in ["_1080p.mp4", ".mp4", ".mov"]:
+                for suffix in ["_1080p.mp4", ".mp4", ".mov", ".m4v"]:
                     if mid.endswith(suffix):
                         mid = mid[:-len(suffix)]
                         break
                 results[mid] = {"file_id": f.get("id"), "filename": name, "size": f.get("size")}
+                results[name] = {"file_id": f.get("id"), "filename": name, "size": f.get("size")}
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+        return results
+
+    def list_all_files(self, folder_id: str) -> list[dict[str, Any]]:
+        """List all files in any Drive folder (for diagnostics)."""
+        query = f"'{folder_id}' in parents and trashed=false"
+        results: list[dict[str, Any]] = []
+        page_token: Optional[str] = None
+        while True:
+            resp = (
+                self._service.files()
+                .list(
+                    q=query,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    corpora="allDrives",
+                    spaces="drive",
+                    fields="nextPageToken, files(id, name, mimeType, size, createdTime)",
+                    pageToken=page_token,
+                    pageSize=100,
+                )
+                .execute()
+            )
+            results.extend(resp.get("files", []))
             page_token = resp.get("nextPageToken")
             if not page_token:
                 break
@@ -185,6 +218,9 @@ class DriveClient:
                 self._service.files()
                 .list(
                     q=query,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    corpora="allDrives",
                     spaces="drive",
                     fields="nextPageToken, files(id, name, mimeType, size)",
                     pageToken=page_token,
@@ -205,7 +241,7 @@ class DriveClient:
         with open(dest_path, "wb") as f:
             downloader = MediaIoBaseDownload(
                 f,
-                self._service.files().get_media(fileId=file_id),
+                self._service.files().get_media(fileId=file_id, supportsAllDrives=True),
             )
             done = False
             while not done:
@@ -221,7 +257,7 @@ class DriveClient:
             media = MediaIoBaseUpload(f, mimetype=mime, resumable=True, chunksize=5 * 1024 * 1024)
             file = (
                 self._service.files()
-                .create(body=metadata, media_body=media, fields="id")
+                .create(body=metadata, media_body=media, fields="id", supportsAllDrives=True)
                 .execute()
             )
         logger.info("Uploaded %s -> Drive %s (%s)", filename, folder_id, file["id"])
@@ -339,6 +375,9 @@ class DriveClient:
             self._service.files()
             .list(
                 q=f"name='{name}' and '{folder_id}' in parents and trashed=false",
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                corpora="allDrives",
                 spaces="drive",
                 fields="files(id)",
                 pageSize=1,

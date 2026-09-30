@@ -115,18 +115,35 @@ def list_veo_recordings() -> Response:
             drive = DriveClient()
             ingested_manifests = drive.list_ingested_manifests_map()
             downloaded_videos = drive.list_downloaded_videos_map()
+            logger.info("Found %d manifests, %d downloaded videos in Drive", len(ingested_manifests), len(downloaded_videos))
         except Exception as drive_exc:
             logger.warning("Could not check Drive for ingested matches: %s", drive_exc)
 
         formatted = []
         for r in recordings:
             slug = r.get("slug") or r.get("identifier") or ""
-            is_analyzed = slug in ingested_manifests
-            is_downloaded = is_analyzed or (slug in downloaded_videos)
+            ident = r.get("identifier") or ""
+
+            # Check if manifest exists (analyzed)
+            is_analyzed = (slug in ingested_manifests) or (ident in ingested_manifests)
+            if not is_analyzed:
+                for mid in ingested_manifests.keys():
+                    if (slug and slug in mid) or (ident and ident in mid):
+                        is_analyzed = True
+                        break
+
+            # Check if video file exists (downloaded)
+            is_downloaded = is_analyzed or (slug in downloaded_videos) or (ident in downloaded_videos)
+            if not is_downloaded:
+                for fname in downloaded_videos.keys():
+                    if (slug and slug in fname) or (ident and ident in fname):
+                        is_downloaded = True
+                        break
+
             status_str = "analyzed" if is_analyzed else ("downloaded" if is_downloaded else "available")
 
             formatted.append({
-                "identifier": r.get("identifier"),
+                "identifier": ident,
                 "slug": slug,
                 "title": r.get("title", "SF Fog Match"),
                 "start": r.get("start") or r.get("created"),
@@ -146,6 +163,25 @@ def list_veo_recordings() -> Response:
         })
     except Exception as exc:
         logger.exception("Failed to fetch Veo recordings: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/drive/debug", methods=["GET"])
+def drive_debug() -> Response:
+    try:
+        drive = DriveClient()
+        ingest_files = drive.list_all_files(drive._ingest_folder_id)
+        output_files = drive.list_all_files(drive._output_folder_id)
+        return jsonify({
+            "ingest_folder_id": drive._ingest_folder_id,
+            "output_folder_id": drive._output_folder_id,
+            "ingest_files_count": len(ingest_files),
+            "ingest_files": [{"id": f["id"], "name": f["name"], "size": f.get("size")} for f in ingest_files],
+            "output_files_count": len(output_files),
+            "output_files": [{"id": f["id"], "name": f["name"], "size": f.get("size")} for f in output_files],
+        })
+    except Exception as exc:
+        logger.exception("Drive debug failed: %s", exc)
         return jsonify({"error": str(exc)}), 500
 
 
