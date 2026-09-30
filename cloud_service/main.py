@@ -378,8 +378,22 @@ def _process_veo_ingest_job(job_id: str, slug: str, match_title: str, client: Ve
 
     except Exception as exc:
         logger.exception("Ingest job %s failed: %s", job_id, exc)
+        raw_err = str(exc)
+        mb_done = job.get("mb_uploaded", 0.0)
+        mb_tot = job.get("mb_total", 0.0)
+
+        if any(term in raw_err for term in ("SSLError", "Max retries exceeded", "ConnectionError", "EOF", "timed out")):
+            clean_err = f"Google Drive connection dropped at {mb_done} MB / {mb_tot} MB. Click 'Retry Ingest' to resume."
+        elif "Could not resolve video URL" in raw_err:
+            clean_err = "Could not locate the 1080p video stream on Veo. The match may still be processing on Veo."
+        elif "quota" in raw_err.lower() or "403" in raw_err:
+            clean_err = "Google Drive API rate limit or quota exceeded. Please check Drive storage."
+        else:
+            clean_err = f"Ingest error: {raw_err[:160]}"
+
         job["stage"] = "error"
-        job["error"] = str(exc)
+        job["error"] = clean_err
+        job["stage_description"] = clean_err
         job["updated_at"] = time.time()
         _save_job(job_id, job)
 

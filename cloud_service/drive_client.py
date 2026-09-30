@@ -339,21 +339,65 @@ class DriveClient:
                     "Content-Length": str(len(chunk)),
                 }
 
-                upload_resp = requests.put(
-                    upload_session_url, headers=chunk_headers, data=chunk, timeout=120
-                )
-                if upload_resp.status_code in (200, 201):
-                    file_id = upload_resp.json().get("id", "")
-                    if progress_callback:
+                # Upload chunk with 3-attempt exponential-backoff retry on SSL/network drops
+                max_retries = 3
+                chunk_uploaded = False
+                for attempt in range(max_retries):
+                    try:
+                        upload_resp = requests.put(
+                            upload_session_url, headers=chunk_headers, data=chunk, timeout=120
+                        )
+                        if upload_resp.status_code in (200, 201):
+                            file_id = upload_resp.json().get("id", "")
+                            if progress_callback:
+                                try:
+                                    progress_callback(total_size, total_size)
+                                except Exception:
+                                    pass
+                            chunk_uploaded = True
+                            break
+                        elif upload_resp.status_code == 308:
+                            chunk_uploaded = True
+                            break
+                        elif upload_resp.status_code in (500, 502, 503, 504):
+                            logger.warning(
+                                "Google Drive returned HTTP %d for chunk %d-%d (attempt %d/%d). Retrying...",
+                                upload_resp.status_code, start_byte, end_byte, attempt + 1, max_retries,
+                            )
+                            time.sleep(2 ** attempt)
+                        else:
+                            upload_resp.raise_for_status()
+                    except Exception as net_err:
+                        logger.warning(
+                            "Chunk upload dropped at bytes %d-%d (attempt %d/%d): %s. Re-querying session...",
+                            start_byte, end_byte, attempt + 1, max_retries, net_err,
+                        )
+                        if attempt == max_retries - 1:
+                            raise
+                        time.sleep(2 ** attempt)
+                        # Re-query session status to check how many bytes Drive actually received
                         try:
-                            progress_callback(total_size, total_size)
-                        except Exception:
-                            pass
+                            check_headers = {
+                                "Content-Range": f"bytes */{total_size if total_size > 0 else '*'}",
+                                "Content-Length": "0",
+                            }
+                            status_resp = requests.put(upload_session_url, headers=check_headers, timeout=30)
+                            if status_resp.status_code == 308:
+                                rng = status_resp.headers.get("Range")
+                                if rng and "-" in rng:
+                                    confirmed_end = int(rng.split("-")[1])
+                                    if confirmed_end >= end_byte:
+                                        chunk_uploaded = True
+                                        break
+                            elif status_resp.status_code in (200, 201):
+                                file_id = status_resp.json().get("id", "")
+                                chunk_uploaded = True
+                                break
+                        except Exception as status_err:
+                            logger.warning("Could not re-query Drive session status: %s", status_err)
+
+                if file_id:
                     break
-                elif upload_resp.status_code == 308:
-                    pass
-                else:
-                    upload_resp.raise_for_status()
 
                 start_byte = end_byte + 1
                 if progress_callback:
