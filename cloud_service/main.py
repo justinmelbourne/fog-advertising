@@ -108,17 +108,35 @@ def list_veo_recordings() -> Response:
         client = VeoApiClient(token=token)
         recordings = client.list_club_recordings(club_slug=club_slug)
 
+        # Check Google Drive for existing downloads and analyzed manifests
+        ingested_manifests = {}
+        downloaded_videos = {}
+        try:
+            drive = DriveClient()
+            ingested_manifests = drive.list_ingested_manifests_map()
+            downloaded_videos = drive.list_downloaded_videos_map()
+        except Exception as drive_exc:
+            logger.warning("Could not check Drive for ingested matches: %s", drive_exc)
+
         formatted = []
         for r in recordings:
+            slug = r.get("slug") or r.get("identifier") or ""
+            is_analyzed = slug in ingested_manifests
+            is_downloaded = is_analyzed or (slug in downloaded_videos)
+            status_str = "analyzed" if is_analyzed else ("downloaded" if is_downloaded else "available")
+
             formatted.append({
                 "identifier": r.get("identifier"),
-                "slug": r.get("slug"),
+                "slug": slug,
                 "title": r.get("title", "SF Fog Match"),
                 "start": r.get("start") or r.get("created"),
                 "duration": r.get("duration"),
                 "thumbnail": r.get("thumbnail"),
                 "url": f"https://app.veo.co{r.get('url')}" if r.get("url") else None,
                 "status": r.get("processing_status"),
+                "is_ingested": is_analyzed,
+                "is_downloaded": is_downloaded,
+                "ingested_status": status_str,
             })
 
         return jsonify({
@@ -283,6 +301,24 @@ def ingest_veo_match() -> Response:
     client = VeoApiClient(token=token)
     slug = client.parse_slug_or_id(match_input)
     match_title = custom_title or f"SF Fog RFC — {slug.replace('-', ' ').title()}"
+
+    force = bool(data.get("force", False))
+    if not force:
+        try:
+            drive = DriveClient()
+            existing_manifest = drive.read_manifest(slug)
+            if existing_manifest:
+                logger.info("Match %s is already ingested and analyzed; returning existing manifest.", slug)
+                return jsonify({
+                    "status": "already_ingested",
+                    "job_id": None,
+                    "match_id": slug,
+                    "title": match_title,
+                    "manifest": existing_manifest,
+                    "message": "Match has already been downloaded and analyzed. Use force=true to re-ingest.",
+                }), 200
+        except Exception as e:
+            logger.warning("Error checking for existing manifest for %s: %s", slug, e)
 
     job_id = uuid.uuid4().hex[:8]
     logger.info("Starting background Veo ingest job %s for match: %s", job_id, slug)

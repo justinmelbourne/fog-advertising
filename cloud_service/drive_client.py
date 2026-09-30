@@ -101,6 +101,70 @@ class DriveClient:
         fh.seek(0)
         return json.loads(fh.read().decode("utf-8"))
 
+    def list_ingested_manifests_map(self) -> dict[str, dict[str, Any]]:
+        """
+        Scan output folder for *_manifest.json files.
+        Returns a dict mapping match_id -> { 'file_id': ..., 'match_id': ... }
+        """
+        query = f"'{self._output_folder_id}' in parents and mimeType='{MANIFEST_MIME}' and trashed=false"
+        results: dict[str, dict[str, Any]] = {}
+        page_token: Optional[str] = None
+        while True:
+            resp = (
+                self._service.files()
+                .list(
+                    q=query,
+                    spaces="drive",
+                    fields="nextPageToken, files(id, name)",
+                    pageToken=page_token,
+                    pageSize=100,
+                )
+                .execute()
+            )
+            for f in resp.get("files", []):
+                name = f.get("name", "")
+                if name.endswith("_manifest.json"):
+                    mid = name[:-len("_manifest.json")]
+                    results[mid] = {"file_id": f.get("id"), "match_id": mid}
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+        return results
+
+    def list_downloaded_videos_map(self) -> dict[str, dict[str, Any]]:
+        """
+        Scan ingest folder for video files.
+        Returns a dict mapping match_id -> { 'file_id': ..., 'filename': ..., 'size': ... }
+        """
+        mime_filter = " or ".join(f"mimeType='{m}'" for m in VIDEO_MIMES)
+        query = f"'{self._ingest_folder_id}' in parents and ({mime_filter}) and trashed=false"
+        results: dict[str, dict[str, Any]] = {}
+        page_token: Optional[str] = None
+        while True:
+            resp = (
+                self._service.files()
+                .list(
+                    q=query,
+                    spaces="drive",
+                    fields="nextPageToken, files(id, name, size)",
+                    pageToken=page_token,
+                    pageSize=100,
+                )
+                .execute()
+            )
+            for f in resp.get("files", []):
+                name = f.get("name", "")
+                mid = name
+                for suffix in ["_1080p.mp4", ".mp4", ".mov"]:
+                    if mid.endswith(suffix):
+                        mid = mid[:-len(suffix)]
+                        break
+                results[mid] = {"file_id": f.get("id"), "filename": name, "size": f.get("size")}
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+        return results
+
     # ------------------------------------------------------------------
     # Video file listing
     # ------------------------------------------------------------------

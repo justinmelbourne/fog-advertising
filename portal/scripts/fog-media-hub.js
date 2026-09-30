@@ -176,10 +176,19 @@
       var dateStr = rec.start ? new Date(rec.start).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "";
       var durStr = _formatDuration(rec.duration || 0);
 
+      var isAnalyzed = rec.is_ingested || rec.ingested_status === "analyzed";
+      var isDownloaded = isAnalyzed || rec.is_downloaded || rec.ingested_status === "downloaded";
+
       var html = "";
       html += '<div class="moment-card__header">';
       html += '<span class="moment-card__badge">Veo Match</span>';
-      html += '<span class="moment-card__score moment-card__score--mid">1080p HD</span>';
+      if (isAnalyzed) {
+        html += '<span class="moment-card__badge moment-card__badge--analyzed">✓ Analyzed</span>';
+      } else if (isDownloaded) {
+        html += '<span class="moment-card__badge moment-card__badge--downloaded">✓ In Drive</span>';
+      } else {
+        html += '<span class="moment-card__score moment-card__score--mid">1080p HD</span>';
+      }
       html += '</div>';
 
       if (thumb) {
@@ -189,19 +198,43 @@
       html += '<div class="moment-card__body">';
       html += '<h3 class="moment-card__title">' + _escapeHtml(title) + '</h3>';
       html += '<p class="moment-card__meta">' + _escapeHtml(dateStr) + " • " + _escapeHtml(durStr) + '</p>';
-      html += '<div class="moment-card__actions moment-card__actions--single">';
-      html += '<button class="fog-button fog-button--primary btn-ingest-card" type="button">Import &amp; Analyze</button>';
-      html += '</div>';
+      
+      if (isAnalyzed) {
+        html += '<div class="moment-card__actions">';
+        html += '<button class="fog-button fog-button--secondary btn-view-clips" type="button">View Match Clips</button>';
+        html += '<button class="fog-button fog-button--ghost btn-reingest-card" type="button" title="Re-download and analyze again">Re-Analyze</button>';
+        html += '</div>';
+      } else {
+        html += '<div class="moment-card__actions moment-card__actions--single">';
+        html += '<button class="fog-button fog-button--primary btn-ingest-card" type="button">Import &amp; Analyze</button>';
+        html += '</div>';
+      }
       html += '</div>';
 
       card.innerHTML = html;
 
-      var btn = card.querySelector(".btn-ingest-card");
-      if (btn) {
-        btn.addEventListener("click", function () {
-          btn.disabled = true;
-          btn.textContent = "Importing…";
-          ingestVeoMatch(rec.slug || rec.identifier, rec.title);
+      var viewBtn = card.querySelector(".btn-view-clips");
+      if (viewBtn) {
+        viewBtn.addEventListener("click", function () {
+          loadManifest(rec.slug || rec.identifier);
+        });
+      }
+
+      var reingestBtn = card.querySelector(".btn-reingest-card");
+      if (reingestBtn) {
+        reingestBtn.addEventListener("click", function () {
+          reingestBtn.disabled = true;
+          reingestBtn.textContent = "Importing…";
+          ingestVeoMatch(rec.slug || rec.identifier, rec.title, true);
+        });
+      }
+
+      var ingestBtn = card.querySelector(".btn-ingest-card");
+      if (ingestBtn) {
+        ingestBtn.addEventListener("click", function () {
+          ingestBtn.disabled = true;
+          ingestBtn.textContent = "Importing…";
+          ingestVeoMatch(rec.slug || rec.identifier, rec.title, false);
         });
       }
 
@@ -209,7 +242,7 @@
     });
   }
 
-  function ingestVeoMatch(slugOrUrl, title) {
+  function ingestVeoMatch(slugOrUrl, title, force) {
     var tracker = document.getElementById("veo-tracker");
     var titleEl = document.getElementById("tracker-title");
     var pctEl = document.getElementById("tracker-pct");
@@ -232,17 +265,22 @@
       if (metricsEl) metricsEl.textContent = "0 MB / 0 MB • 0 Mbps";
     }
 
-    _showToast("Ingest started for " + (title || slugOrUrl) + "…");
+    _showToast((force ? "Re-ingesting " : "Ingest started for ") + (title || slugOrUrl) + "…");
 
     _apiFetch("/veo/ingest", {
       method: "POST",
       body: JSON.stringify({
         match: slugOrUrl,
         title: title,
+        force: !!force,
       }),
     })
       .then(function (result) {
-        if (result.job_id) {
+        if (result.status === "already_ingested" && result.manifest) {
+          _showToast("Match already analyzed! Loading clips…");
+          if (tracker) tracker.hidden = true;
+          _onIngestComplete(result.manifest);
+        } else if (result.job_id) {
           _pollJobStatus(result.job_id);
         } else if (result.manifest) {
           _onIngestComplete(result.manifest);
