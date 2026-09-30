@@ -430,3 +430,50 @@ class DriveClient:
         )
         files = resp.get("files", [])
         return files[0]["id"] if files else None
+
+    # ------------------------------------------------------------------
+    # Social ready clip listings
+    # ------------------------------------------------------------------
+
+    def list_social_clips(self) -> list[dict[str, Any]]:
+        """
+        List extracted social video clips (.mp4) in the output folder.
+        Returns list of dicts with clip metadata, format, file id, and direct view URLs.
+        """
+        if not self._output_folder_id:
+            logger.warning("No DRIVE_OUTPUT_FOLDER_ID configured.")
+            return []
+
+        files = self.list_video_files(self._output_folder_id)
+        clips: list[dict[str, Any]] = []
+
+        for f in files:
+            name = f.get("name", "")
+            fid = f.get("id", "")
+
+            # Deduce format from filename
+            fmt = "16:9"
+            if "9x16" in name or "9_16" in name:
+                fmt = "9:16"
+            elif "1x1" in name or "1_1" in name:
+                fmt = "1:1"
+            elif "4x5" in name or "4_5" in name:
+                fmt = "4:5"
+
+            # Parse event description or match name if present
+            display_title = name.replace(".mp4", "").replace("_", " ").title()
+
+            clips.append({
+                "clip_id": fid,
+                "file_name": name,
+                "title": display_title,
+                "format": fmt,
+                "size_bytes": f.get("size"),
+                "drive_file_id": fid,
+                "drive_url": f"https://drive.google.com/file/d/{fid}/view",
+                "download_url": f"https://drive.google.com/uc?id={fid}&export=download",
+            })
+
+        logger.info("Found %d social-ready clips in Drive output folder.", len(clips))
+        return clips
+

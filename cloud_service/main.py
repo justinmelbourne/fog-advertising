@@ -139,9 +139,13 @@ def health() -> Response:
 def list_veo_recordings() -> Response:
     try:
         club_slug = request.args.get("club", "san-francisco-fog-rfc")
+        fetch_all = request.args.get("all", "true").lower() in ("true", "1", "yes")
+        page_arg = request.args.get("page")
+        page = int(page_arg) if page_arg and page_arg.isdigit() else None
+
         token = os.environ.get("VEO_API_TOKEN", "")
         client = VeoApiClient(token=token)
-        recordings = client.list_club_recordings(club_slug=club_slug)
+        recordings = client.list_club_recordings(club_slug=club_slug, fetch_all=fetch_all, page=page)
 
         # Check Google Drive for existing downloads and analyzed manifests
         ingested_manifests = {}
@@ -167,15 +171,18 @@ def list_veo_recordings() -> Response:
                         is_analyzed = True
                         break
 
-            # Check if video file exists (downloaded)
-            is_downloaded = is_analyzed or (slug in downloaded_videos) or (ident in downloaded_videos)
+            # Check if video file exists in Google Drive (downloaded)
+            is_downloaded = (slug in downloaded_videos) or (ident in downloaded_videos)
+            drive_file_id = downloaded_videos.get(slug, {}).get("file_id") or downloaded_videos.get(ident, {}).get("file_id")
             if not is_downloaded:
-                for fname in downloaded_videos.keys():
+                for fname, finfo in downloaded_videos.items():
                     if (slug and slug in fname) or (ident and ident in fname):
                         is_downloaded = True
+                        drive_file_id = finfo.get("file_id")
                         break
 
-            status_str = "analyzed" if is_analyzed else ("downloaded" if is_downloaded else "available")
+            is_expiring_soon = bool(r.get("is_expiring_soon", False))
+            is_expired = bool(r.get("is_expired", False))
 
             formatted.append({
                 "identifier": ident,
@@ -188,16 +195,128 @@ def list_veo_recordings() -> Response:
                 "status": r.get("processing_status"),
                 "is_ingested": is_analyzed,
                 "is_downloaded": is_downloaded,
-                "ingested_status": status_str,
+                "drive_file_id": drive_file_id,
+                "is_expiring_soon": is_expiring_soon,
+                "is_expired": is_expired,
+                "days_until_expiry": r.get("days_until_expiry"),
+                "expires_at": r.get("expires_at"),
             })
+
+        # Calculate high-level summary counts for UI
+        expiring_urgent = [x for x in formatted if x["is_expiring_soon"] and not x["is_downloaded"]]
+        in_drive_count = sum(1 for x in formatted if x["is_downloaded"])
+        analyzed_count = sum(1 for x in formatted if x["is_ingested"])
 
         return jsonify({
             "club": club_slug,
             "count": len(formatted),
+            "expiring_count": len(expiring_urgent),
+            "downloaded_count": in_drive_count,
+            "analyzed_count": analyzed_count,
+            "expired_count": sum(1 for x in formatted if x["is_expired"]),
             "recordings": formatted,
         })
     except Exception as exc:
         logger.exception("Failed to fetch Veo recordings: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/veo/backup-expiring", methods=["POST"])
+def backup_expiring_matches() -> Response:
+    """
+    Finds all Veo recordings that are expiring soon and not yet in Google Drive,
+    and queues background download jobs for each.
+    """
+    try:
+        token = os.environ.get("VEO_API_TOKEN", "")
+        client = VeoApiClient(token=token)
+        recordings = client.list_club_recordings(fetch_all=True)
+
+        drive = DriveClient()
+        downloaded_videos = drive.list_downloaded_videos_map()
+
+        queued_jobs = []
+        for r in recordings:
+            if not r.get("is_expiring_soon"):
+                continue
+
+            slug = r.get("slug") or r.get("identifier") or ""
+            is_already_downloaded = (slug in downloaded_videos)
+            if not is_already_downloaded:
+                for fname in downloaded_videos.keys():
+                    if slug and slug in fname:
+                        is_already_downloaded = True
+                        break
+
+            if is_already_downloaded:
+                continue
+
+            # Queue ingest job
+            match_title = r.get("title", f"SF Fog RFC — {slug.replace('-', ' ').title()}")
+            job_id = uuid.uuid4().hex[:8]
+            initial_job_data = {
+                "job_id": job_id,
+                "match_id": slug,
+                "title": match_title,
+                "stage": "starting",
+                "stage_description": f"Queued urgent backup: {r.get('days_until_expiry', 0)} days remaining on Veo...",
+                "progress_pct": 0,
+                "bytes_uploaded": 0,
+                "total_bytes": 0,
+                "mb_uploaded": 0.0,
+                "mb_total": 0.0,
+                "speed_mbps": 0.0,
+                "eta_seconds": 0,
+                "events_count": 0,
+                "manifest": None,
+                "drive_file_id": None,
+                "error": None,
+                "created_at": time.time(),
+                "updated_at": time.time(),
+            }
+            _save_job(job_id, initial_job_data)
+
+            thread = threading.Thread(
+                target=_process_veo_ingest_job,
+                args=(job_id, slug, match_title, client, False),
+                daemon=True,
+            )
+            thread.start()
+
+            queued_jobs.append({
+                "job_id": job_id,
+                "match_id": slug,
+                "title": match_title,
+                "days_until_expiry": r.get("days_until_expiry"),
+            })
+
+        logger.info("Queued %d expiring matches for Drive backup", len(queued_jobs))
+        return jsonify({
+            "status": "queued",
+            "count": len(queued_jobs),
+            "jobs": queued_jobs,
+            "message": f"Queued {len(queued_jobs)} expiring matches for direct backup to Google Drive."
+        })
+    except Exception as exc:
+        logger.exception("Failed to backup expiring matches: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/drive/social-clips", methods=["GET"])
+def list_social_clips() -> Response:
+    """
+    Returns all social-ready video clips extracted and saved in Google Drive.
+    """
+    try:
+        drive = DriveClient()
+        clips = drive.list_social_clips()
+        return jsonify({
+            "status": "ok",
+            "count": len(clips),
+            "clips": clips,
+        })
+    except Exception as exc:
+        logger.exception("Failed to list social clips: %s", exc)
         return jsonify({"error": str(exc)}), 500
 
 
