@@ -13,7 +13,7 @@ import logging
 import os
 import subprocess
 import tempfile
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from engine.models import Manifest, VideoSource, Event
 from engine.audio_analyzer import detect_whistle_timestamps, compute_rms_energy_peaks
@@ -180,6 +180,174 @@ def run_extract_job(match_id: str, event_id: str, fmt: str) -> dict:
             "filename": social_filename,
             "drive_file_id": file_id,
             "message": f"Clip exported as {fmt} and saved to Drive. File ID: {file_id}",
+        }
+
+
+def run_batch_extract_job(
+    job_id: str,
+    match_id: str,
+    items: list[dict[str, str]],
+    progress_callback: Optional[Any] = None,
+) -> dict:
+    """
+    Execute batch clip extraction and aspect-ratio reframing for multiple events.
+    Downloads the source video ONCE and cuts/reframes all requested clips.
+
+    items: list of dicts, e.g. [{"event_id": "...", "format": "9:16"}, ...]
+    Formats supported: "16:9", "9:16", "1:1", "4:5"
+    """
+    drive = DriveClient()
+    manifest_data = drive.read_manifest(match_id)
+    if not manifest_data:
+        raise ValueError(f"Manifest not found for match_id: {match_id}")
+
+    manifest = Manifest.model_validate(manifest_data)
+    output_folder_id = os.environ["DRIVE_OUTPUT_FOLDER_ID"]
+
+    # Validate items against events in manifest
+    valid_items = []
+    for item in items:
+        eid = item.get("event_id")
+        fmt = item.get("format", "16:9")
+        if fmt not in ("16:9", "9:16", "1:1", "4:5"):
+            continue
+        ev = next((e for e in manifest.events if e.event_id == eid), None)
+        if ev:
+            valid_items.append({"event_id": eid, "format": fmt, "event": ev})
+
+    if not valid_items:
+        raise ValueError("No matching valid events found in manifest for batch extraction")
+
+    total_items = len(valid_items)
+    results = []
+
+    with tempfile.TemporaryDirectory(prefix=f"fog_batch_{job_id}_") as tmpdir:
+        # Cache downloaded sources so each video is downloaded only ONCE
+        downloaded_sources: dict[str, str] = {}
+        # Cache master cuts so multiple aspect ratios for the same event don't re-cut
+        cut_masters: dict[str, str] = {}
+
+        if progress_callback:
+            progress_callback(5, "Resolving match source video...", "", results)
+
+        for idx, item in enumerate(valid_items):
+            event_id = item["event_id"]
+            fmt = item["format"]
+            event: Event = item["event"]
+
+            source = next((s for s in manifest.sources if s.source_id == event.source_id), None)
+            source_filename = source.filename if source else f"{match_id}_1080p.mp4"
+            source_id = source.source_id if source else "veo_main"
+
+            # 1. Download source video once if not yet downloaded
+            if source_id not in downloaded_sources:
+                if progress_callback:
+                    progress_callback(
+                        10,
+                        f"Downloading match master video from Google Drive ({source_filename})...",
+                        "",
+                        results,
+                    )
+
+                # Locate source video file in Drive
+                file_id = getattr(source, "drive_file_id", None)
+                if not file_id:
+                    ingest_folder_id = os.environ.get("DRIVE_INGEST_FOLDER_ID", "")
+                    all_files = drive.list_video_files(ingest_folder_id)
+                    file_record = next(
+                        (f for f in all_files if f["name"] == source_filename or match_id in f["name"]),
+                        None,
+                    )
+                    if file_record:
+                        file_id = file_record["id"]
+                    else:
+                        downloaded_map = drive.list_downloaded_videos_map()
+                        existing_info = downloaded_map.get(match_id) or downloaded_map.get(source_filename)
+                        if existing_info:
+                            file_id = existing_info.get("file_id")
+
+                if not file_id:
+                    raise ValueError(f"Could not locate source video file '{source_filename}' in Drive")
+
+                local_src = os.path.join(tmpdir, source_filename)
+                logger.info("[%s] Downloading source %s (file_id=%s) to %s", job_id, source_filename, file_id, local_src)
+                drive.download_file_to_path(file_id, local_src)
+                downloaded_sources[source_id] = local_src
+
+            local_src = downloaded_sources[source_id]
+
+            # Current item progress update
+            pct = int(15 + ((idx) / total_items) * 80)
+            desc_event = event.description or event.event_type or event_id
+            if progress_callback:
+                progress_callback(
+                    pct,
+                    f"Processing clip {idx + 1}/{total_items}: {desc_event} ({fmt})...",
+                    event_id,
+                    results,
+                )
+
+            try:
+                # 2. Cut master 16:9 lossless if not already cut for this event
+                master_path = cut_masters.get(event_id)
+                if not master_path or not os.path.exists(master_path):
+                    master_path = os.path.join(tmpdir, f"{event_id}_master.mp4")
+                    cut_cmd = build_lossless_cut_command(local_src, event.start_time, event.end_time, master_path)
+                    _run_ffmpeg(cut_cmd)
+                    cut_masters[event_id] = master_path
+
+                # 3. Reframe to format
+                social_filename = f"{event_id}_{fmt.replace(':', 'x')}.mp4"
+                social_path = os.path.join(tmpdir, social_filename)
+
+                if fmt == "16:9":
+                    social_path = master_path
+                    social_filename = f"{event_id}_master_16x9.mp4"
+                else:
+                    reframe_cmd = build_reframe_command(master_path, social_path, aspect_ratio=fmt)
+                    _run_ffmpeg(reframe_cmd)
+
+                # 4. Upload to Drive output folder
+                uploaded_id = drive.upload_file_to_folder(social_path, social_filename, output_folder_id)
+
+                results.append({
+                    "event_id": event_id,
+                    "format": fmt,
+                    "filename": social_filename,
+                    "drive_file_id": uploaded_id,
+                    "status": "success",
+                    "description": desc_event,
+                })
+                logger.info("[%s] Batch extracted %s (%s) -> Drive file %s", job_id, event_id, fmt, uploaded_id)
+
+            except Exception as item_err:
+                logger.exception("[%s] Failed to extract clip %s (%s): %s", job_id, event_id, fmt, item_err)
+                results.append({
+                    "event_id": event_id,
+                    "format": fmt,
+                    "status": "error",
+                    "error": str(item_err),
+                    "description": desc_event,
+                })
+
+            # Update progress after completing item
+            pct_after = int(15 + ((idx + 1) / total_items) * 80)
+            if progress_callback:
+                progress_callback(
+                    pct_after,
+                    f"Completed {idx + 1}/{total_items}: {desc_event} ({fmt})",
+                    event_id,
+                    results,
+                )
+
+        success_count = sum(1 for r in results if r.get("status") == "success")
+        return {
+            "status": "complete" if success_count > 0 else "error",
+            "match_id": match_id,
+            "total_items": total_items,
+            "success_count": success_count,
+            "results": results,
+            "message": f"Extracted and saved {success_count}/{total_items} clips to Google Drive.",
         }
 
 

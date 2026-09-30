@@ -85,7 +85,7 @@ from engine.ai_suggester import generate_clip_pairings
 from engine.clipper import build_lossless_cut_command, build_reframe_command
 from cloud_service.drive_client import DriveClient
 from cloud_service.veo_api_client import VeoApiClient
-from cloud_service.job_runner import run_analysis_job, run_extract_job
+from cloud_service.job_runner import run_analysis_job, run_extract_job, run_batch_extract_job
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -698,6 +698,93 @@ def extract() -> Response:
     except Exception as exc:
         logger.exception("Extract job failed for event %s: %s", event_id, exc)
         return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# POST /extract/batch
+# Batch clip extraction triggered by Squarespace Match Review tab.
+# Downloads the match video ONCE from Google Drive, cuts and reframes all
+# requested clips, and uploads them to Drive in the background.
+# Returns job_id immediately (HTTP 202) for real-time progress tracking.
+# Body (JSON):
+#   match_id  str                         — match ID / slug
+#   items     list[{"event_id", "format"}] — list of clips to generate
+# ---------------------------------------------------------------------------
+
+@app.route("/extract/batch", methods=["POST"])
+def batch_extract() -> Response:
+    data = request.get_json(silent=True) or {}
+    match_id: Optional[str] = data.get("match_id")
+    items: list[dict[str, str]] = data.get("items") or []
+
+    if not match_id or not items:
+        return jsonify({"error": "match_id and a non-empty items list are required"}), 400
+
+    job_id = uuid.uuid4().hex[:8]
+    logger.info("Starting batch extraction job %s for match %s (%d items)", job_id, match_id, len(items))
+
+    initial_job_data = {
+        "job_id": job_id,
+        "match_id": match_id,
+        "stage": "starting",
+        "stage_description": f"Starting batch extraction for {len(items)} clips...",
+        "progress_pct": 0,
+        "total_items": len(items),
+        "completed_items": 0,
+        "current_item": "",
+        "results": [],
+        "error": None,
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+    _save_job(job_id, initial_job_data)
+
+    def _worker():
+        try:
+            def on_progress(pct: int, desc: str, current_item: str, results: list):
+                job = _get_job(job_id) or initial_job_data
+                job["stage"] = "processing"
+                job["progress_pct"] = pct
+                job["stage_description"] = desc
+                job["current_item"] = current_item
+                job["results"] = results
+                job["completed_items"] = len(results)
+                job["updated_at"] = time.time()
+                _save_job(job_id, job)
+
+            res = run_batch_extract_job(
+                job_id=job_id,
+                match_id=match_id,
+                items=items,
+                progress_callback=on_progress,
+            )
+            job = _get_job(job_id) or initial_job_data
+            job["stage"] = "complete" if res.get("status") != "error" else "error"
+            job["progress_pct"] = 100
+            job["stage_description"] = res.get("message", "Batch extraction complete.")
+            job["results"] = res.get("results", [])
+            job["completed_items"] = len(res.get("results", []))
+            job["updated_at"] = time.time()
+            _save_job(job_id, job)
+        except Exception as exc:
+            logger.exception("Batch extract job %s failed: %s", job_id, exc)
+            job = _get_job(job_id) or initial_job_data
+            job["stage"] = "error"
+            job["error"] = str(exc)
+            job["stage_description"] = f"Batch extraction error: {str(exc)[:160]}"
+            job["updated_at"] = time.time()
+            _save_job(job_id, job)
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+
+    return jsonify({
+        "status": "processing",
+        "job_id": job_id,
+        "match_id": match_id,
+        "items_count": len(items),
+        "message": f"Batch extraction started. Track progress at /jobs/{job_id}",
+    }), 202
 
 
 # ---------------------------------------------------------------------------
