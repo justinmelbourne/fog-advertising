@@ -38,7 +38,7 @@ steps:
       - '--service-account=fog-video-sa@sffog-video-analysis.iam.gserviceaccount.com'
       - '--memory=4Gi'
       - '--cpu=2'
-      - '--timeout=600'
+      - '--timeout=3600'
       - '--concurrency=10'
       - '--max-instances=5'
       - '--session-affinity'
