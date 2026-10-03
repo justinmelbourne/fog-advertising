@@ -85,7 +85,26 @@ from engine.ai_suggester import generate_clip_pairings
 from engine.clipper import build_lossless_cut_command, build_reframe_command
 from cloud_service.drive_client import DriveClient
 from cloud_service.veo_api_client import VeoApiClient
-from cloud_service.job_runner import run_analysis_job, run_extract_job, run_batch_extract_job
+from cloud_service.job_runner import run_analysis_job, run_extract_job, run_batch_extract_job, run_highlights_job
+from engine.naming import (
+    get_master_video_filename,
+    get_social_clip_filename,
+    get_highlight_reel_filename,
+    get_match_folder_name,
+    get_manifest_filename,
+    parse_match_identifiers,
+    slugify_moment,
+    get_moment_folder_name,
+    get_target_subfolder_path,
+    FOLDER_HIGHLIGHTS,
+    FOLDER_TRIES,
+    FOLDER_SCRUMS,
+    FOLDER_LINEOUTS,
+    FOLDER_KICKS,
+    FOLDER_GENERAL,
+    FOLDER_OPPOSING_TEAM,
+)
+from engine.team_analyzer import classify_event_sentiment
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -369,6 +388,14 @@ def list_social_clips() -> Response:
 def drive_debug() -> Response:
     try:
         drive = DriveClient()
+        inspect_folder = request.args.get("folder_id")
+        if inspect_folder:
+            files = drive.list_all_files(inspect_folder)
+            return jsonify({
+                "folder_id": inspect_folder,
+                "files_count": len(files),
+                "files": [{"id": f["id"], "name": f["name"], "mimeType": f.get("mimeType"), "size": f.get("size")} for f in files],
+            })
         ingest_files = drive.list_all_files(drive._ingest_folder_id)
         output_files = drive.list_all_files(drive._output_folder_id)
         return jsonify({
@@ -377,10 +404,395 @@ def drive_debug() -> Response:
             "ingest_files_count": len(ingest_files),
             "ingest_files": [{"id": f["id"], "name": f["name"], "size": f.get("size")} for f in ingest_files],
             "output_files_count": len(output_files),
-            "output_files": [{"id": f["id"], "name": f["name"], "size": f.get("size")} for f in output_files],
+            "output_files": [{"id": f["id"], "name": f["name"], "mimeType": f.get("mimeType"), "size": f.get("size")} for f in output_files],
         })
     except Exception as exc:
         logger.exception("Drive debug failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# POST /drive/migrate-naming
+# Standardizes existing Google Drive files and folder structure according to:
+#   YYYYMMDD_UNIQUEID_file-name.ext
+# - Moves match clips, highlight reels, and manifests into match subfolders:
+#   YYYYMMDD_UNIQUEID_sf-fog-vs-{opponent}
+# - Renames clips: YYYYMMDD_UNIQUEID_fog-rugby_{dimensions}_{moment_type}.mp4
+# - Renames highlight reels: YYYYMMDD_UNIQUEID_fog-rugby_{dimensions}_{reel_type}.mp4
+# - Renames manifests: YYYYMMDD_UNIQUEID_manifest.json
+# - Renames ingest match videos: YYYYMMDD_UNIQUEID_sf-fog-rugby_vs_{opponent}_1080p.mp4
+# ---------------------------------------------------------------------------
+
+@app.route("/drive/migrate-naming", methods=["POST"])
+def migrate_naming() -> Response:
+    import re
+    data = request.get_json(silent=True) or {}
+    dry_run = data.get("dry_run", False)
+
+    try:
+        drive = DriveClient()
+        changes = []
+
+        # 1. Ingest folder: rename master match videos
+        ingest_files = drive.list_all_files(drive._ingest_folder_id)
+        for f in ingest_files:
+            fname = f["name"]
+            fid = f["id"]
+            if fname.endswith("_1080p.mp4"):
+                if re.match(r'^\d{8}_[A-Za-z0-9]+_sf-fog-rugby_vs_', fname):
+                    continue
+                slug = fname[:-10]  # remove _1080p.mp4
+                new_name = get_master_video_filename(slug, quality="1080p")
+                if new_name != fname:
+                    if not dry_run:
+                        drive.rename_file(fid, new_name)
+                    changes.append({
+                        "type": "ingest_master_rename",
+                        "file_id": fid,
+                        "old_name": fname,
+                        "new_name": new_name,
+                    })
+
+        # 2. Output folder: organize clips, reels, and manifests into match subfolders
+        out_files = drive.list_all_files(drive._output_folder_id)
+        
+        manifest_files = [
+            f for f in out_files
+            if "manifest" in f["name"].lower() and f["name"].endswith(".json")
+        ]
+        # Prioritize Sydney Convicts 1st XV match so it claims its legacy clips and highlight reels
+        manifest_files.sort(key=lambda x: 0 if "sydney-convicts-1" in x["name"] else 1)
+
+        handled_file_ids = set()
+
+        for mf in manifest_files:
+            mf_name = mf["name"]
+            manifest_data = drive.read_manifest(mf_name)
+            if not manifest_data:
+                try:
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".json") as tf:
+                        drive.download_file_to_path(mf["id"], tf.name)
+                        with open(tf.name, "r") as jf:
+                            manifest_data = json.load(jf)
+                except Exception as ex:
+                    logger.warning("Could not read manifest %s: %s", mf_name, ex)
+                    continue
+
+            if not manifest_data or not manifest_data.get("match_id"):
+                continue
+
+            match_id = manifest_data["match_id"]
+            events_by_id = {e["event_id"]: e for e in manifest_data.get("events", [])}
+            _, unique_id, opponent = parse_match_identifiers(match_id)
+
+            match_folder_id = drive.get_or_create_match_folder(drive._output_folder_id, match_id)
+            match_folder_name = get_match_folder_name(match_id)
+
+            # Move and rename THIS manifest file
+            new_mf_name = get_manifest_filename(match_id)
+            if mf["id"] not in handled_file_ids:
+                if mf_name != new_mf_name:
+                    if not dry_run:
+                        drive.rename_file(mf["id"], new_mf_name)
+                if not dry_run:
+                    drive.move_file(mf["id"], match_folder_id)
+                handled_file_ids.add(mf["id"])
+                changes.append({
+                    "type": "manifest",
+                    "file_id": mf["id"],
+                    "old_name": mf_name,
+                    "new_name": new_mf_name,
+                    "folder": match_folder_name,
+                })
+
+            match_files = drive.list_all_files(match_folder_id)
+            combined_files = {f["id"]: f for f in (out_files + match_files)}
+
+            for fid, f in combined_files.items():
+                if fid in handled_file_ids:
+                    continue
+                fname = f["name"]
+
+                # A. Highlight reels for this match
+                if "highlights" in fname.lower() and fname.endswith(".mp4"):
+                    if (opponent in fname.lower().replace("_", "-")) or ("sydney" in fname.lower() and "sydney" in opponent):
+                        dim = "16x9" if "16x9" in fname else "9x16" if "9x16" in fname else "16x9"
+                        new_name = get_highlight_reel_filename(match_id, dim, "match-highlights")
+                        if fname != new_name:
+                            if not dry_run:
+                                drive.rename_file(fid, new_name)
+                                drive.move_file(fid, match_folder_id)
+                            changes.append({
+                                "type": "highlight_reel",
+                                "file_id": fid,
+                                "old_name": fname,
+                                "new_name": new_name,
+                                "folder": match_folder_name,
+                            })
+                            handled_file_ids.add(fid)
+                        elif fid in [x["id"] for x in out_files]:
+                            if not dry_run:
+                                drive.move_file(fid, match_folder_id)
+                            changes.append({
+                                "type": "move_to_match_folder",
+                                "file_id": fid,
+                                "name": fname,
+                                "folder": match_folder_name,
+                            })
+                            handled_file_ids.add(fid)
+
+                # B. Social clips matching an event in THIS manifest
+                elif fname.endswith(".mp4"):
+                    ev_match = re.search(r'(veo_evt_\d+)', fname)
+                    if ev_match:
+                        ev_id = ev_match.group(1)
+                        if ev_id in events_by_id:
+                            dim = "16x9" if ("16x9" in fname or "master" in fname) else "9x16" if "9x16" in fname else "16x9"
+                            ev_data = events_by_id[ev_id]
+                            moment_type = slugify_moment(
+                                ev_data.get("event_type", "moment"),
+                                ev_data.get("description", ""),
+                                ev_id,
+                            )
+                            new_name = get_social_clip_filename(match_id, dim, moment_type)
+                            if fname != new_name:
+                                if not dry_run:
+                                    drive.rename_file(fid, new_name)
+                                    drive.move_file(fid, match_folder_id)
+                                changes.append({
+                                    "type": "social_clip",
+                                    "file_id": fid,
+                                    "old_name": fname,
+                                    "new_name": new_name,
+                                    "folder": match_folder_name,
+                                })
+                                handled_file_ids.add(fid)
+                            elif fid in [x["id"] for x in out_files]:
+                                if not dry_run:
+                                    drive.move_file(fid, match_folder_id)
+                                changes.append({
+                                    "type": "move_to_match_folder",
+                                    "file_id": fid,
+                                    "name": fname,
+                                    "folder": match_folder_name,
+                                })
+                                handled_file_ids.add(fid)
+
+        return jsonify({
+            "status": "complete",
+            "dry_run": dry_run,
+            "changes_count": len(changes),
+            "changes": changes,
+        })
+    except Exception as exc:
+        logger.exception("Failed to migrate naming: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# POST /drive/organize-moments
+# Organizes match social clips and highlight reels into moment-type subfolders:
+#   - Highlights/
+#   - Tries/
+#   - Scrums/
+#   - Lineouts/
+#   - Conversions & Kicks/
+#   - General Play/
+#   - Opposing Team Videos/
+#       - Tries/
+#       - Scrums/
+#       - Lineouts/
+#       - Conversions & Kicks/
+#       - General Play/
+# Analyzes each clip to discern Fog positive vs Fog negative (Opposing team),
+# routing opponent scores/wins to Opposing Team Videos/ while Fog positive clips
+# stay in the primary moment structure.
+# ---------------------------------------------------------------------------
+
+@app.route("/drive/organize-moments", methods=["POST"])
+def organize_moments() -> Response:
+    import re
+    data = request.get_json(silent=True) or {}
+    match_filter = data.get("match_id")
+    dry_run = data.get("dry_run", False)
+
+    try:
+        drive = DriveClient()
+        changes = []
+
+        out_files = drive.list_all_files(drive._output_folder_id)
+        match_folders = [
+            f for f in out_files
+            if f.get("mimeType") == "application/vnd.google-apps.folder"
+        ]
+
+        if not match_folders:
+            return jsonify({"status": "no_match_folders_found", "changes": []})
+
+        for mf in match_folders:
+            folder_id = mf["id"]
+            folder_name = mf["name"]
+
+            if match_filter and match_filter not in folder_name:
+                continue
+
+            manifest_data = drive.read_manifest(folder_name)
+            if not manifest_data:
+                mfiles = drive.list_all_files(folder_id)
+                for f in mfiles:
+                    if f["name"].endswith(".json"):
+                        manifest_data = drive.read_manifest(f["name"])
+                        if manifest_data:
+                            break
+
+            events_by_id = {}
+            if manifest_data and "events" in manifest_data:
+                events_by_id = {e["event_id"]: e for e in manifest_data["events"]}
+
+            # 1. Create primary moment subfolders inside match folder
+            primary_subfolder_ids = {}
+            for f_name in (
+                FOLDER_HIGHLIGHTS,
+                FOLDER_TRIES,
+                FOLDER_SCRUMS,
+                FOLDER_LINEOUTS,
+                FOLDER_KICKS,
+                FOLDER_GENERAL,
+                FOLDER_OPPOSING_TEAM,
+            ):
+                if not dry_run:
+                    primary_subfolder_ids[f_name] = drive.get_or_create_subfolder(folder_id, f_name)
+                else:
+                    primary_subfolder_ids[f_name] = f"mock_{f_name}"
+
+            # 2. Create nested subfolders inside Opposing Team Videos/
+            opposing_parent_id = primary_subfolder_ids[FOLDER_OPPOSING_TEAM]
+            opposing_subfolder_ids = {}
+            for f_name in (
+                FOLDER_TRIES,
+                FOLDER_SCRUMS,
+                FOLDER_LINEOUTS,
+                FOLDER_KICKS,
+                FOLDER_GENERAL,
+            ):
+                if not dry_run:
+                    opposing_subfolder_ids[f_name] = drive.get_or_create_subfolder(opposing_parent_id, f_name)
+                else:
+                    opposing_subfolder_ids[f_name] = f"mock_opp_{f_name}"
+
+            # 3. List all video files inside this match folder (recursive)
+            match_videos = drive.list_all_video_files_recursive(folder_id)
+
+            for f in match_videos:
+                fid = f["id"]
+                fname = f["name"]
+
+                # A. Highlights
+                if "highlights" in fname.lower() and fname.endswith(".mp4"):
+                    target_folder_id = primary_subfolder_ids[FOLDER_HIGHLIGHTS]
+                    target_folder_name = f"{folder_name}/{FOLDER_HIGHLIGHTS}"
+
+                    if not dry_run:
+                        drive.move_file(fid, target_folder_id)
+                    changes.append({
+                        "file_id": fid,
+                        "file_name": fname,
+                        "category": FOLDER_HIGHLIGHTS,
+                        "sentiment": "fog_positive",
+                        "team": "sf_fog",
+                        "team_display": "SF Fog RFC",
+                        "target_folder": target_folder_name,
+                    })
+
+                # B. Social Clips
+                elif fname.endswith(".mp4"):
+                    ev_match = re.search(r'(veo_evt_\d+)', fname)
+                    if ev_match:
+                        ev_id = ev_match.group(1)
+                    else:
+                        num_match = re.search(r'-(\d{3,4})\.mp4$', fname)
+                        if num_match:
+                            ev_id = f"veo_evt_{num_match.group(1)}"
+                        else:
+                            ev_id = None
+                    ev_data = events_by_id.get(ev_id, {}) if ev_id else {}
+
+                    event_type = ev_data.get("event_type", "")
+                    description = ev_data.get("description", "")
+                    start_time = ev_data.get("start_time", 0.0)
+                    end_time = ev_data.get("end_time", 0.0)
+
+                    if not event_type:
+                        for et_candidate in ("try", "scrum", "lineout", "conversion", "kick"):
+                            if et_candidate in fname.lower():
+                                event_type = et_candidate
+                                break
+
+                    sentiment_info = classify_event_sentiment(
+                        event_id=ev_id or fname,
+                        event_type=event_type,
+                        description=description,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+
+                    moment_folder = get_moment_folder_name(event_type, filename=fname)
+
+                    if sentiment_info["sentiment"] == "fog_negative":
+                        target_folder_id = opposing_subfolder_ids.get(moment_folder, opposing_parent_id)
+                        target_folder_name = f"{folder_name}/{FOLDER_OPPOSING_TEAM}/{moment_folder}"
+                    else:
+                        target_folder_id = primary_subfolder_ids.get(moment_folder, primary_subfolder_ids[FOLDER_GENERAL])
+                        target_folder_name = f"{folder_name}/{moment_folder}"
+
+                    if not dry_run:
+                        drive.move_file(fid, target_folder_id)
+
+                    changes.append({
+                        "file_id": fid,
+                        "file_name": fname,
+                        "event_id": ev_id,
+                        "category": moment_folder,
+                        "sentiment": sentiment_info["sentiment"],
+                        "team": sentiment_info["team"],
+                        "team_display": sentiment_info["team_display"],
+                        "confidence": sentiment_info["confidence"],
+                        "target_folder": target_folder_name,
+                    })
+
+            # 4. Update manifest events with sentiment and team classification
+            if manifest_data and "events" in manifest_data and not dry_run:
+                manifest_updated = False
+                for ev in manifest_data["events"]:
+                    eid = ev.get("event_id", "")
+                    s_info = classify_event_sentiment(
+                        event_id=eid,
+                        event_type=ev.get("event_type", ""),
+                        description=ev.get("description", ""),
+                        start_time=ev.get("start_time", 0.0),
+                        end_time=ev.get("end_time", 0.0),
+                    )
+                    ev["sentiment"] = s_info["sentiment"]
+                    ev["team"] = s_info["team"]
+                    ev["team_display"] = s_info["team_display"]
+                    manifest_updated = True
+
+                if manifest_updated:
+                    try:
+                        updated_manifest_obj = Manifest.model_validate(manifest_data)
+                        drive.write_manifest(updated_manifest_obj)
+                    except Exception as mf_err:
+                        logger.warning("Could not rewrite manifest: %s", mf_err)
+
+        return jsonify({
+            "status": "complete",
+            "dry_run": dry_run,
+            "organized_clips_count": len(changes),
+            "changes": changes,
+        })
+    except Exception as exc:
+        logger.exception("Failed to organize moments: %s", exc)
         return jsonify({"error": str(exc)}), 500
 
 
@@ -426,7 +838,8 @@ def _process_veo_ingest_job(job_id: str, slug: str, match_title: str, client: Ve
             return
 
         video_url = details["video_url"]
-        filename = f"{slug}_1080p.mp4"
+        filename = get_master_video_filename(slug, quality="1080p")
+        legacy_filename = f"{slug}_1080p.mp4"
 
         # Parse pre-tagged highlights early so the UI sees detected rugby events immediately
         events = parse_veo_highlights(details.get("highlights", []), source_id="veo_main")
@@ -441,10 +854,10 @@ def _process_veo_ingest_job(job_id: str, slug: str, match_title: str, client: Ve
         # If not forcing re-download, check if 1080p video already exists in Drive Ingest folder
         if not force:
             downloaded_map = drive.list_downloaded_videos_map()
-            existing_info = downloaded_map.get(slug) or downloaded_map.get(filename)
+            existing_info = downloaded_map.get(slug) or downloaded_map.get(filename) or downloaded_map.get(legacy_filename)
             if not existing_info:
                 for k, v in downloaded_map.items():
-                    if (slug and slug in k) or (filename and filename in k):
+                    if (slug and slug in k) or (filename and filename in k) or (legacy_filename and legacy_filename in k):
                         existing_info = v
                         break
             if existing_info and existing_info.get("file_id"):
@@ -829,6 +1242,121 @@ def batch_extract() -> Response:
         "match_id": match_id,
         "items_count": len(items),
         "message": f"Batch extraction started. Track progress at /jobs/{job_id}",
+    }), 202
+
+
+# ---------------------------------------------------------------------------
+# POST /highlights/build
+# Assembles 16:9 Broadcast and 9:16 Action-Zoom highlight reels in Google Drive.
+# ---------------------------------------------------------------------------
+
+@app.route("/highlights/build", methods=["POST"])
+def build_highlights() -> Response:
+    data = request.get_json(silent=True) or {}
+    match_id: Optional[str] = data.get("match_id", "20260822-san-francisco-fog-rfc-a-side-vs-sydney-convicts-1-v4fb17b0")
+    formats: list[str] = data.get("formats", ["16:9", "9:16"])
+    zoom: float = float(data.get("zoom", 1.25))
+    stream: bool = bool(data.get("stream", True))
+
+    job_id = uuid.uuid4().hex[:8]
+    logger.info("Starting highlights packaging job %s for match %s (stream=%s)", job_id, match_id, stream)
+
+    initial_job_data = {
+        "job_id": job_id,
+        "match_id": match_id,
+        "stage": "starting",
+        "stage_description": "Starting highlight reel packaging in Cloud Run...",
+        "progress_pct": 0,
+        "reels": {},
+        "error": None,
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+    _save_job(job_id, initial_job_data)
+
+    if stream:
+        import queue
+        q: queue.Queue = queue.Queue()
+
+        def on_progress(p_dict: dict):
+            job = _get_job(job_id) or initial_job_data
+            job.update(p_dict)
+            job["updated_at"] = time.time()
+            _save_job(job_id, job)
+            logger.info("[%s] %s (%s%%)", job_id, p_dict.get("stage_description"), p_dict.get("progress_pct"))
+            q.put({"type": "progress", "job_id": job_id, **p_dict})
+
+        def _stream_worker():
+            try:
+                res = run_highlights_job(job_id=job_id, match_id=match_id, formats=formats, zoom=zoom, progress_callback=on_progress)
+                job = _get_job(job_id) or initial_job_data
+                job["stage"] = "complete"
+                job["progress_pct"] = 100
+                job["stage_description"] = "Highlight reels generated and uploaded to Google Drive!"
+                job["reels"] = res.get("reels", {})
+                job["updated_at"] = time.time()
+                _save_job(job_id, job)
+                logger.info("[%s] HIGHLIGHTS JOB COMPLETE: %s", job_id, res.get("reels"))
+                q.put({"type": "complete", "job_id": job_id, "status": "complete", "reels": res.get("reels", {})})
+            except Exception as exc:
+                logger.exception("Highlights job %s failed: %s", job_id, exc)
+                job = _get_job(job_id) or initial_job_data
+                job["stage"] = "error"
+                job["error"] = str(exc)
+                job["stage_description"] = f"Highlights packaging error: {str(exc)[:160]}"
+                job["updated_at"] = time.time()
+                _save_job(job_id, job)
+                q.put({"type": "error", "job_id": job_id, "error": str(exc)})
+            finally:
+                q.put(None)
+
+        t = threading.Thread(target=_stream_worker)
+        t.start()
+
+        def generate():
+            yield f"data: {json.dumps({'type': 'started', 'job_id': job_id, 'match_id': match_id})}\n\n"
+            while True:
+                item = q.get()
+                if item is None:
+                    break
+                yield f"data: {json.dumps(item)}\n\n"
+
+        return Response(generate(), mimetype="text/event-stream")
+
+    def _worker():
+        try:
+            def on_progress(p_dict: dict):
+                job = _get_job(job_id) or initial_job_data
+                job.update(p_dict)
+                job["updated_at"] = time.time()
+                _save_job(job_id, job)
+
+            res = run_highlights_job(job_id=job_id, match_id=match_id, formats=formats, zoom=zoom, progress_callback=on_progress)
+            job = _get_job(job_id) or initial_job_data
+            job["stage"] = "complete"
+            job["progress_pct"] = 100
+            job["stage_description"] = "Highlight reels generated and uploaded to Google Drive!"
+            job["reels"] = res.get("reels", {})
+            job["updated_at"] = time.time()
+            _save_job(job_id, job)
+        except Exception as exc:
+            logger.exception("Highlights job %s failed: %s", job_id, exc)
+            job = _get_job(job_id) or initial_job_data
+            job["stage"] = "error"
+            job["error"] = str(exc)
+            job["stage_description"] = f"Highlights packaging error: {str(exc)[:160]}"
+            job["updated_at"] = time.time()
+            _save_job(job_id, job)
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+
+    return jsonify({
+        "status": "processing",
+        "job_id": job_id,
+        "match_id": match_id,
+        "formats": formats,
+        "message": f"Highlight packaging started. Track progress at /jobs/{job_id}",
     }), 202
 
 

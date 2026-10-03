@@ -16,6 +16,15 @@ import tempfile
 from typing import Any, Callable, Optional
 
 from engine.models import Manifest, VideoSource, Event
+from engine.naming import (
+    get_social_clip_filename,
+    get_highlight_reel_filename,
+    get_match_folder_name,
+    slugify_moment,
+    get_target_subfolder_path,
+    FOLDER_HIGHLIGHTS,
+)
+from engine.team_analyzer import classify_event_sentiment
 from engine.audio_analyzer import detect_whistle_timestamps, compute_rms_energy_peaks
 from engine.ai_suggester import generate_clip_pairings
 from engine.cli import generate_match_manifest_from_events
@@ -159,19 +168,39 @@ def run_extract_job(match_id: str, event_id: str, fmt: str) -> dict:
         _run_ffmpeg(cut_cmd)
 
         # Reframe to requested social format
-        social_filename = f"{event_id}_{fmt.replace(':', 'x')}.mp4"
+        moment_type = slugify_moment(event.event_type, event.description)
+        social_filename = get_social_clip_filename(match_id, fmt, moment_type)
         social_path = os.path.join(tmpdir, social_filename)
 
         if fmt == "16:9":
-            # Already 16:9 master — just upload that
+            # Already 16:9 master
             social_path = master_path
-            social_filename = f"{event_id}_master_16x9.mp4"
         else:
             reframe_cmd = build_reframe_command(master_path, social_path, aspect_ratio=fmt)  # type: ignore[arg-type]
             _run_ffmpeg(reframe_cmd)
 
-        # Upload to Drive output folder
-        file_id = drive.upload_file_to_folder(social_path, social_filename, output_folder_id)
+        # Determine sentiment & subfolder routing
+        sentiment_info = classify_event_sentiment(
+            event_id=event.event_id,
+            event_type=event.event_type,
+            description=event.description,
+            start_time=event.start_time,
+            end_time=event.end_time,
+            video_path=master_path,
+        )
+        primary_folder, nested_subfolder = get_target_subfolder_path(
+            event.event_type,
+            sentiment=sentiment_info["sentiment"],
+            filename=social_filename,
+        )
+
+        # Upload to target moment subfolder inside match folder
+        match_folder_id = drive.get_or_create_match_folder(output_folder_id, match_id)
+        target_folder_id = drive.get_or_create_subfolder(match_folder_id, primary_folder)
+        if nested_subfolder:
+            target_folder_id = drive.get_or_create_subfolder(target_folder_id, nested_subfolder)
+
+        file_id = drive.upload_file_to_folder(social_path, social_filename, target_folder_id)
 
         return {
             "status": "complete",
@@ -179,7 +208,9 @@ def run_extract_job(match_id: str, event_id: str, fmt: str) -> dict:
             "format": fmt,
             "filename": social_filename,
             "drive_file_id": file_id,
-            "message": f"Clip exported as {fmt} and saved to Drive. File ID: {file_id}",
+            "sentiment": sentiment_info["sentiment"],
+            "team": sentiment_info["team"],
+            "message": f"Clip exported as {fmt} ({social_filename}) and saved to Drive. File ID: {file_id}",
         }
 
 
@@ -297,28 +328,50 @@ def run_batch_extract_job(
                     cut_masters[event_id] = master_path
 
                 # 3. Reframe to format
-                social_filename = f"{event_id}_{fmt.replace(':', 'x')}.mp4"
+                moment_type = slugify_moment(event.event_type, event.description)
+                social_filename = get_social_clip_filename(match_id, fmt, moment_type)
                 social_path = os.path.join(tmpdir, social_filename)
 
                 if fmt == "16:9":
                     social_path = master_path
-                    social_filename = f"{event_id}_master_16x9.mp4"
                 else:
                     reframe_cmd = build_reframe_command(master_path, social_path, aspect_ratio=fmt)
                     _run_ffmpeg(reframe_cmd)
 
-                # 4. Upload to Drive output folder
-                uploaded_id = drive.upload_file_to_folder(social_path, social_filename, output_folder_id)
+                # 4. Determine sentiment & subfolder routing
+                sentiment_info = classify_event_sentiment(
+                    event_id=event.event_id,
+                    event_type=event.event_type,
+                    description=event.description,
+                    start_time=event.start_time,
+                    end_time=event.end_time,
+                    video_path=master_path,
+                )
+                primary_folder, nested_subfolder = get_target_subfolder_path(
+                    event.event_type,
+                    sentiment=sentiment_info["sentiment"],
+                    filename=social_filename,
+                )
+
+                # Upload to target moment subfolder inside match folder
+                match_folder_id = drive.get_or_create_match_folder(output_folder_id, match_id)
+                target_folder_id = drive.get_or_create_subfolder(match_folder_id, primary_folder)
+                if nested_subfolder:
+                    target_folder_id = drive.get_or_create_subfolder(target_folder_id, nested_subfolder)
+
+                uploaded_id = drive.upload_file_to_folder(social_path, social_filename, target_folder_id)
 
                 results.append({
                     "event_id": event_id,
                     "format": fmt,
                     "filename": social_filename,
                     "drive_file_id": uploaded_id,
+                    "sentiment": sentiment_info["sentiment"],
+                    "team": sentiment_info["team"],
                     "status": "success",
                     "description": desc_event,
                 })
-                logger.info("[%s] Batch extracted %s (%s) -> Drive file %s", job_id, event_id, fmt, uploaded_id)
+                logger.info("[%s] Batch extracted %s (%s) [%s] -> Drive file %s (%s)", job_id, event_id, fmt, sentiment_info["sentiment"], uploaded_id, social_filename)
 
             except Exception as item_err:
                 logger.exception("[%s] Failed to extract clip %s (%s): %s", job_id, event_id, fmt, item_err)
@@ -348,6 +401,127 @@ def run_batch_extract_job(
             "success_count": success_count,
             "results": results,
             "message": f"Extracted and saved {success_count}/{total_items} clips to Google Drive.",
+        }
+
+
+def run_highlights_job(
+    job_id: str,
+    match_id: str,
+    formats: list[str] = ["16:9", "9:16"],
+    zoom: float = 1.25,
+    progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
+) -> dict[str, Any]:
+    """
+    Server-side Cloud Run worker that compiles 16:9 Broadcast Highlights
+    and 9:16 Vertical Action-Zoom Highlights directly in Google Drive.
+    """
+    from engine.highlight_packager import build_16x9_reel, build_9x16_reel
+    from googleapiclient.http import MediaFileUpload
+
+    drive = DriveClient()
+    output_folder_id = os.environ["DRIVE_OUTPUT_FOLDER_ID"]
+    match_folder_id = drive.get_or_create_match_folder(output_folder_id, match_id)
+
+    if progress_callback:
+        progress_callback({"stage": "scanning", "progress_pct": 5, "stage_description": "Locating match clips in Google Drive..."})
+
+    # Search in both the match folder and the root output folder
+    out_files = drive.list_all_files(match_folder_id) + drive.list_all_files(output_folder_id)
+
+    events_needed = [
+        'veo_evt_028', 'veo_evt_004', 'veo_evt_017', 'veo_evt_010',
+        'veo_evt_034', 'veo_evt_038', 'veo_evt_032', 'veo_evt_036'
+    ]
+
+    with tempfile.TemporaryDirectory(prefix=f"highlights_{job_id}_") as tmpdir:
+        raw_dir = os.path.join(tmpdir, "raw")
+        os.makedirs(raw_dir, exist_ok=True)
+        clip_paths = {}
+
+        for idx, ev_id in enumerate(events_needed):
+            # Locate file matching event id and 16x9 or master
+            fid = None
+            for f in out_files:
+                fname = f["name"]
+                if (fname == f"{ev_id}_master_16x9.mp4") or (ev_id in fname and ("16x9" in fname or "master" in fname)):
+                    fid = f["id"]
+                    break
+
+            if not fid:
+                raise ValueError(f"Required master clip for {ev_id} not found in Drive output folder or match subfolder.")
+
+            local_path = os.path.join(raw_dir, f"{ev_id}.mp4")
+            if progress_callback:
+                progress_callback({
+                    "stage": "downloading",
+                    "progress_pct": int(5 + (idx / len(events_needed)) * 15),
+                    "stage_description": f"Streaming {ev_id} ({idx+1}/{len(events_needed)}) to Cloud Run worker..."
+                })
+            drive.download_file_to_path(fid, local_path)
+            clip_paths[ev_id] = local_path
+
+        uploaded_reels = {}
+
+        # Create or retrieve Highlights subfolder inside match folder
+        highlights_folder_id = drive.get_or_create_subfolder(match_folder_id, FOLDER_HIGHLIGHTS)
+
+        # 16:9 Broadcast Reel
+        if "16:9" in formats:
+            def p_16x9(pct: int, desc: str):
+                if progress_callback:
+                    progress_callback({"stage": "rendering_16x9", "progress_pct": int(20 + pct * 0.35), "stage_description": desc})
+
+            reel_16x9_name = get_highlight_reel_filename(match_id, "16x9", "match-highlights")
+            reel_16x9 = os.path.join(tmpdir, reel_16x9_name)
+            build_16x9_reel(tmpdir, clip_paths, reel_16x9, progress_fn=p_16x9)
+
+            if progress_callback:
+                progress_callback({"stage": "uploading", "progress_pct": 55, "stage_description": "Uploading 16:9 Broadcast Highlights to Drive..."})
+
+            media = MediaFileUpload(reel_16x9, mimetype="video/mp4", resumable=True)
+            res = drive._service.files().create(
+                body={"name": reel_16x9_name, "parents": [highlights_folder_id]},
+                media_body=media,
+                supportsAllDrives=True
+            ).execute()
+            uploaded_reels["16:9"] = {
+                "file_id": res["id"],
+                "name": reel_16x9_name,
+                "url": f"https://drive.google.com/file/d/{res['id']}/view?usp=drivesdk"
+            }
+
+        # 9:16 Vertical Action-Zoom Reel
+        if "9:16" in formats:
+            def p_9x16(pct: int, desc: str):
+                if progress_callback:
+                    progress_callback({"stage": "rendering_9x16", "progress_pct": int(55 + pct * 0.40), "stage_description": desc})
+
+            reel_9x16_name = get_highlight_reel_filename(match_id, "9x16", "match-highlights")
+            reel_9x16 = os.path.join(tmpdir, reel_9x16_name)
+            build_9x16_reel(tmpdir, clip_paths, reel_9x16, progress_fn=p_9x16)
+
+            if progress_callback:
+                progress_callback({"stage": "uploading", "progress_pct": 95, "stage_description": "Uploading 9:16 Action-Zoom Reel to Drive..."})
+
+            media = MediaFileUpload(reel_9x16, mimetype="video/mp4", resumable=True)
+            res = drive._service.files().create(
+                body={"name": reel_9x16_name, "parents": [highlights_folder_id]},
+                media_body=media,
+                supportsAllDrives=True
+            ).execute()
+            uploaded_reels["9:16"] = {
+                "file_id": res["id"],
+                "name": reel_9x16_name,
+                "url": f"https://drive.google.com/file/d/{res['id']}/view?usp=drivesdk"
+            }
+
+        if progress_callback:
+            progress_callback({"stage": "complete", "progress_pct": 100, "stage_description": "Highlights generated and saved to Drive!"})
+
+        return {
+            "status": "complete",
+            "match_id": match_id,
+            "reels": uploaded_reels
         }
 
 

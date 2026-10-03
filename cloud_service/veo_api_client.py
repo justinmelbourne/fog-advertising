@@ -155,22 +155,57 @@ class VeoApiClient:
                     sum(1 for x in parsed if x.get("is_expired")))
         return parsed
 
-    def get_match_videos(self, match_slug_or_id: str) -> list[dict[str, Any]]:
+    def get_match_videos(
+        self,
+        match_slug_or_id: str,
+        render_type: Optional[str] = None,
+        retries: int = 3,
+    ) -> list[dict[str, Any]]:
         """
-        Get all rendered video files (including direct 1080p MP4 URLs on c.veocdn.com).
+        Get all rendered video files (including direct 1080p, 1080p60, and Panoramic 4K MP4 URLs).
+        Queries all available render types by default or falls back to 'standard'.
         """
         identifier = self.parse_slug_or_id(match_slug_or_id)
         url = f"{VEO_APP_API_BASE}/matches/{identifier}/videos/"
-        params = {"render_type": "standard", "ordering": "-width"}
 
-        try:
-            resp = self._session.get(url, params=params, timeout=DEFAULT_TIMEOUT)
-            resp.raise_for_status()
-            videos = resp.json()
-            return videos if isinstance(videos, list) else []
-        except Exception as exc:
-            logger.exception("Failed to get match videos for %s: %s", identifier, exc)
-            return []
+        for attempt in range(1, retries + 1):
+            try:
+                # 1. If explicit render_type requested, query it directly
+                if render_type:
+                    params = {"render_type": render_type, "ordering": "-width"}
+                    resp = self._session.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+                    if resp.status_code == 200:
+                        videos = resp.json()
+                        return videos if isinstance(videos, list) else []
+                    resp.raise_for_status()
+
+                # 2. Otherwise query without render_type to discover all available streams (panoramic, 1080p60, etc.)
+                params = {"ordering": "-width"}
+                resp = self._session.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+                if resp.status_code == 200:
+                    videos = resp.json()
+                    if isinstance(videos, list) and len(videos) > 0:
+                        # Sort by resolution (width * height) descending
+                        videos.sort(
+                            key=lambda v: (int(v.get("width") or 0) * int(v.get("height") or 0)),
+                            reverse=True,
+                        )
+                        return videos
+
+                # Fallback to standard if broad query returned empty
+                fallback_params = {"render_type": "standard", "ordering": "-width"}
+                fallback_resp = self._session.get(url, params=fallback_params, timeout=DEFAULT_TIMEOUT)
+                if fallback_resp.status_code == 200:
+                    videos = fallback_resp.json()
+                    return videos if isinstance(videos, list) else []
+
+            except requests.exceptions.RequestException as exc:
+                if attempt < retries:
+                    time.sleep(1.0 * attempt)
+                    continue
+                logger.exception("Failed to get match videos for %s after %d attempts: %s", identifier, retries, exc)
+
+        return []
 
     def get_match_highlights(self, match_slug_or_id: str) -> list[dict[str, Any]]:
         """
@@ -189,23 +224,48 @@ class VeoApiClient:
             logger.exception("Failed to get match highlights for %s: %s", identifier, exc)
             return []
 
-    def resolve_match_details(self, match_input: str) -> Optional[dict[str, Any]]:
+    def resolve_match_details(
+        self,
+        match_input: str,
+        prefer_panoramic: bool = False,
+    ) -> Optional[dict[str, Any]]:
         """
         Resolves a full package for a match:
         - identifier and slug
-        - best video MP4 direct CDN download URL
-        - width/height/mime_type
+        - best video MP4 direct CDN download URL (picks highest resolution available)
+        - width/height/mime_type/render_type
         - thumbnail URL
         - AI highlight tags with rugby events and timestamps
         """
         slug_or_id = self.parse_slug_or_id(match_input)
         videos = self.get_match_videos(slug_or_id)
         if not videos:
-            logger.warning("No standard videos found for Veo match: %s", slug_or_id)
+            logger.warning("No videos found for Veo match: %s", slug_or_id)
             return None
 
-        # Pick best video (highest width, available)
-        best_video = videos[0]
+        # Filter videos with valid URLs
+        valid_videos = [v for v in videos if v.get("url")]
+        if not valid_videos:
+            logger.warning("Videos exist but none contain download URLs for Veo match: %s", slug_or_id)
+            return None
+
+        # If user explicitly requested panoramic stream, search for it first
+        best_video = None
+        if prefer_panoramic:
+            for v in valid_videos:
+                rtype = str(v.get("render_type", "")).lower()
+                if "panoramic" in rtype or int(v.get("width") or 0) > 1920:
+                    best_video = v
+                    break
+
+        if not best_video:
+            # Pick highest pixel resolution (width * height)
+            valid_videos.sort(
+                key=lambda v: (int(v.get("width") or 0) * int(v.get("height") or 0)),
+                reverse=True,
+            )
+            best_video = valid_videos[0]
+
         video_url = best_video.get("url")
         if not video_url:
             return None
@@ -215,8 +275,10 @@ class VeoApiClient:
         return {
             "match_id": slug_or_id,
             "video_url": video_url,
-            "width": best_video.get("width", 1920),
-            "height": best_video.get("height", 1080),
+            "width": int(best_video.get("width") or 1920),
+            "height": int(best_video.get("height") or 1080),
+            "fps": float(best_video.get("fps") or 30.0),
+            "render_type": best_video.get("render_type", "standard"),
             "mime_type": best_video.get("mime_type", "video/mp4"),
             "thumbnail": best_video.get("thumbnail"),
             "highlights_count": len(highlights),

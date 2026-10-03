@@ -23,6 +23,12 @@ from google.auth import default as google_auth_default
 from google.auth.transport.requests import Request as GoogleAuthRequest
 
 from engine.models import Manifest
+from engine.naming import (
+    get_manifest_filename,
+    get_match_folder_name,
+    get_master_video_filename,
+    parse_match_identifiers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +51,8 @@ class DriveClient:
         creds, _ = google_auth_default(scopes=["https://www.googleapis.com/auth/drive"])
         self._creds = creds
         self._service = build("drive", "v3", credentials=creds, cache_discovery=False)
-        self._ingest_folder_id: str = os.environ["DRIVE_INGEST_FOLDER_ID"]
-        self._output_folder_id: str = os.environ["DRIVE_OUTPUT_FOLDER_ID"]
+        self._ingest_folder_id: str = os.environ.get("DRIVE_INGEST_FOLDER_ID", "13nRt7Ozw8DKPTM3bjVXZlkpfzr1_Kj9P")
+        self._output_folder_id: str = os.environ.get("DRIVE_OUTPUT_FOLDER_ID", "1lNCnRFDyyf3bE0fzNHqHNpzN7s5xalzy")
 
     # ------------------------------------------------------------------
     # Manifest read / write
@@ -54,24 +60,45 @@ class DriveClient:
 
     def write_manifest(self, manifest: Manifest) -> str:
         """Upload or update a manifest.json file in the output folder. Returns file ID."""
-        filename = f"{manifest.match_id}_manifest.json"
+        primary_name = get_manifest_filename(manifest.match_id)
+        legacy_name = f"{manifest.match_id}_manifest.json"
         content = manifest.model_dump_json(indent=2).encode("utf-8")
         fh = io.BytesIO(content)
         media = MediaIoBaseUpload(fh, mimetype=MANIFEST_MIME, resumable=False)
 
-        # Check if it already exists so we update rather than create a duplicate
-        existing_id = self._find_file(filename, self._output_folder_id)
+        # Check if either standardized or legacy exists in root or subfolders
+        existing_id = self._find_file(primary_name, self._output_folder_id) or self._find_file(legacy_name, self._output_folder_id)
+        if not existing_id:
+            query = f"(name='{primary_name}' or name='{legacy_name}') and mimeType='{MANIFEST_MIME}' and trashed=false"
+            resp = (
+                self._service.files()
+                .list(
+                    q=query,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    corpora="allDrives",
+                    spaces="drive",
+                    fields="files(id, name)",
+                    pageSize=1,
+                )
+                .execute()
+            )
+            files = resp.get("files", [])
+            if files:
+                existing_id = files[0]["id"]
+
         if existing_id:
             file = (
                 self._service.files()
-                .update(fileId=existing_id, media_body=media, supportsAllDrives=True)
+                .update(fileId=existing_id, body={"name": primary_name}, media_body=media, supportsAllDrives=True)
                 .execute()
             )
-            logger.info("Updated manifest: %s (%s)", filename, file["id"])
+            logger.info("Updated manifest: %s (%s)", primary_name, file["id"])
         else:
+            match_folder_id = self.get_or_create_match_folder(self._output_folder_id, manifest.match_id)
             metadata = {
-                "name": filename,
-                "parents": [self._output_folder_id],
+                "name": primary_name,
+                "parents": [match_folder_id],
                 "mimeType": MANIFEST_MIME,
             }
             file = (
@@ -79,14 +106,38 @@ class DriveClient:
                 .create(body=metadata, media_body=media, fields="id", supportsAllDrives=True)
                 .execute()
             )
-            logger.info("Created manifest: %s (%s)", filename, file["id"])
+            logger.info("Created manifest: %s (%s) inside match folder %s", primary_name, file["id"], match_folder_id)
 
         return file["id"]
 
     def read_manifest(self, match_id: str) -> Optional[dict[str, Any]]:
         """Download and parse a manifest JSON file by match ID. Returns None if not found."""
-        filename = f"{match_id}_manifest.json"
-        file_id = self._find_file(filename, self._output_folder_id)
+        primary_name = get_manifest_filename(match_id)
+        file_id = self._find_file(primary_name, self._output_folder_id)
+        if not file_id:
+            legacy_name = f"{match_id}_manifest.json"
+            file_id = self._find_file(legacy_name, self._output_folder_id)
+        if not file_id:
+            # Also search anywhere in Drive (e.g. inside match subfolders)
+            query = f"(name='{primary_name}' or name='{match_id}_manifest.json' or name contains '{match_id}') and mimeType='{MANIFEST_MIME}' and trashed=false"
+            resp = (
+                self._service.files()
+                .list(
+                    q=query,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    corpora="allDrives",
+                    spaces="drive",
+                    fields="files(id, name)",
+                    pageSize=10,
+                )
+                .execute()
+            )
+            files = resp.get("files", [])
+            for f in files:
+                if f["name"] in (primary_name, f"{match_id}_manifest.json") or match_id in f["name"]:
+                    file_id = f["id"]
+                    break
         if not file_id:
             return None
 
@@ -264,6 +315,79 @@ class DriveClient:
         logger.info("Uploaded %s -> Drive %s (%s)", filename, folder_id, file["id"])
         return file["id"]
 
+    def get_or_create_subfolder(self, parent_folder_id: str, folder_name: str) -> str:
+        """
+        Ensures a subfolder named folder_name exists in parent_folder_id.
+        Returns the subfolder ID.
+        """
+        query = f"'{parent_folder_id}' in parents and name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        resp = (
+            self._service.files()
+            .list(
+                q=query,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                corpora="allDrives",
+                spaces="drive",
+                fields="files(id, name)",
+                pageSize=1,
+            )
+            .execute()
+        )
+        files = resp.get("files", [])
+        if files:
+            return files[0]["id"]
+
+        metadata = {
+            "name": folder_name,
+            "parents": [parent_folder_id],
+            "mimeType": "application/vnd.google-apps.folder",
+        }
+        res = (
+            self._service.files()
+            .create(body=metadata, fields="id", supportsAllDrives=True)
+            .execute()
+        )
+        logger.info("Created subfolder: %s (%s) inside %s", folder_name, res["id"], parent_folder_id)
+        return res["id"]
+
+    def get_or_create_match_folder(self, parent_folder_id: str, match_id: str) -> str:
+        """
+        Ensures a subfolder named YYYYMMDD_UNIQUEID_sf-fog-vs-{opponent} exists in parent_folder_id.
+        Returns the subfolder ID.
+        """
+        folder_name = get_match_folder_name(match_id)
+        return self.get_or_create_subfolder(parent_folder_id, folder_name)
+
+    def rename_file(self, file_id: str, new_name: str) -> dict[str, Any]:
+        """Renames a file in Google Drive without moving or re-uploading content."""
+        return (
+            self._service.files()
+            .update(fileId=file_id, body={"name": new_name}, supportsAllDrives=True)
+            .execute()
+        )
+
+    def move_file(self, file_id: str, new_parent_id: str) -> dict[str, Any]:
+        """Moves a file to a new parent folder in Google Drive."""
+        file = self._service.files().get(fileId=file_id, fields="parents, name", supportsAllDrives=True).execute()
+        current_parents = file.get("parents", [])
+        if new_parent_id in current_parents and len(current_parents) == 1:
+            logger.debug("File %s already in target parent %s", file_id, new_parent_id)
+            return file
+
+        remove_parents = [p for p in current_parents if p != new_parent_id]
+        update_args = {
+            "fileId": file_id,
+            "supportsAllDrives": True,
+            "fields": "id, parents, name",
+        }
+        if new_parent_id not in current_parents:
+            update_args["addParents"] = new_parent_id
+        if remove_parents:
+            update_args["removeParents"] = ",".join(remove_parents)
+
+        return self._service.files().update(**update_args).execute()
+
     def stream_url_to_folder(
         self,
         download_url: str,
@@ -436,21 +560,66 @@ class DriveClient:
     # Social ready clip listings
     # ------------------------------------------------------------------
 
+    def list_all_video_files_recursive(self, root_folder_id: str) -> list[dict[str, Any]]:
+        """Recursively lists all video files under root_folder_id, traversing all subfolders."""
+        all_videos: list[dict[str, Any]] = []
+        folders_to_visit = [root_folder_id]
+        visited_folders = set()
+
+        while folders_to_visit:
+            curr_id = folders_to_visit.pop(0)
+            if curr_id in visited_folders:
+                continue
+            visited_folders.add(curr_id)
+
+            page_token = None
+            while True:
+                resp = (
+                    self._service.files()
+                    .list(
+                        q=f"'{curr_id}' in parents and trashed=false",
+                        supportsAllDrives=True,
+                        includeItemsFromAllDrives=True,
+                        corpora="allDrives",
+                        spaces="drive",
+                        fields="nextPageToken, files(id, name, mimeType, size)",
+                        pageToken=page_token,
+                        pageSize=100,
+                    )
+                    .execute()
+                )
+                for item in resp.get("files", []):
+                    mime = item.get("mimeType", "")
+                    if mime == "application/vnd.google-apps.folder":
+                        folders_to_visit.append(item["id"])
+                    elif mime in VIDEO_MIMES or item.get("name", "").endswith((".mp4", ".mov", ".m4v")):
+                        all_videos.append(item)
+                page_token = resp.get("nextPageToken")
+                if not page_token:
+                    break
+
+        return all_videos
+
     def list_social_clips(self) -> list[dict[str, Any]]:
         """
-        List extracted social video clips (.mp4) in the output folder.
+        List extracted social video clips (.mp4) in the output folder and all match & moment subfolders.
         Returns list of dicts with clip metadata, format, file id, and direct view URLs.
         """
         if not self._output_folder_id:
             logger.warning("No DRIVE_OUTPUT_FOLDER_ID configured.")
             return []
 
-        files = self.list_video_files(self._output_folder_id)
+        files = self.list_all_video_files_recursive(self._output_folder_id)
         clips: list[dict[str, Any]] = []
+        seen_ids = set()
 
         for f in files:
-            name = f.get("name", "")
             fid = f.get("id", "")
+            if fid in seen_ids:
+                continue
+            seen_ids.add(fid)
+
+            name = f.get("name", "")
 
             # Deduce format from filename
             fmt = "16:9"
@@ -461,8 +630,13 @@ class DriveClient:
             elif "4x5" in name or "4_5" in name:
                 fmt = "4:5"
 
-            # Parse event description or match name if present
+            # Parse standardized naming: YYYYMMDD_UNIQUEID_fog-rugby_DIM_MOMENT.mp4
             display_title = name.replace(".mp4", "").replace("_", " ").title()
+            parts = name.replace(".mp4", "").split("_")
+            if len(parts) >= 5 and parts[2] == "fog-rugby":
+                # Standardized format: parts[0]=date, parts[1]=uid, parts[2]='fog-rugby', parts[3]=dim, parts[4+]=moment
+                moment = " ".join(parts[4:]).replace("-", " ").title()
+                display_title = f"{moment} ({parts[3]})"
 
             clips.append({
                 "clip_id": fid,
@@ -475,6 +649,6 @@ class DriveClient:
                 "download_url": f"https://drive.google.com/uc?id={fid}&export=download",
             })
 
-        logger.info("Found %d social-ready clips in Drive output folder.", len(clips))
+        logger.info("Found %d social-ready clips in Drive output folder and subfolders.", len(clips))
         return clips
 
