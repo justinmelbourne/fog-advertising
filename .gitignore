@@ -7,3 +7,5 @@ output_clips/
 *.mp4
 *.wav
 *.mov
+.superpowers/
+.env
