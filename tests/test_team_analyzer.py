@@ -7,11 +7,43 @@ from engine.team_analyzer import (
 )
 
 class TestTeamAnalyzer(unittest.TestCase):
-    def test_fallback_heuristic_fog(self):
+    def test_fallback_heuristic_untagged_needs_review(self):
+        # Unverified moments must never be filed as Fog positive
         res = fallback_heuristic_classification("try", "Veo AI Try", "Sydney Convicts")
-        self.assertEqual(res["sentiment"], "fog_positive")
-        self.assertEqual(res["team"], "sf_fog")
-        self.assertEqual(res["team_display"], "SF Fog RFC")
+        self.assertEqual(res["sentiment"], "neutral")
+        self.assertEqual(res["team"], "unknown")
+        self.assertEqual(res["sentiment_confidence"], 0.0)
+
+    def test_generic_opponent_name_not_matched_by_accident(self):
+        res = fallback_heuristic_classification("try", "Veo AI Try", "Opponent")
+        self.assertEqual(res["sentiment"], "neutral")
+
+    def test_classify_event_without_video_needs_review(self):
+        res = classify_event({"event_type": "try", "description": "Veo AI Try"}, video_path=None)
+        self.assertEqual(res["sentiment"], "neutral")
+
+    @patch("engine.team_analyzer.requests.post", side_effect=ConnectionError("boom"))
+    def test_gemini_failure_routes_needs_review(self, _mock_post):
+        res = classify_moment_with_gemini(["/tmp/fake_frame.jpg"], "try", api_key="k")
+        self.assertEqual(res["sentiment"], "neutral")
+
+    @patch.dict("os.environ", {"GEMINI_MODEL": "gemini-test-model"})
+    @patch("engine.team_analyzer.requests.post")
+    def test_api_key_in_header_not_url_and_model_configurable(self, mock_post):
+        mock_post.return_value = MagicMock(json=MagicMock(return_value={}))
+        classify_moment_with_gemini(["/tmp/fake_frame.jpg"], "try", api_key="secret-key")
+        url = mock_post.call_args.args[0]
+        self.assertNotIn("secret-key", url)
+        self.assertIn("gemini-test-model", url)
+        self.assertEqual(mock_post.call_args.kwargs["headers"]["x-goog-api-key"], "secret-key")
+
+    @patch("engine.team_analyzer.requests.post")
+    def test_unknown_sentiment_label_routes_needs_review(self, mock_post):
+        mock_post.return_value = MagicMock(json=MagicMock(return_value={
+            "candidates": [{"content": {"parts": [{"text": '{"sentiment": "great", "confidence": 0.99}'}]}}]
+        }))
+        res = classify_moment_with_gemini(["/tmp/fake_frame.jpg"], "try", api_key="k")
+        self.assertEqual(res["sentiment"], "neutral")
 
     def test_fallback_heuristic_opponent(self):
         res = fallback_heuristic_classification("try", "Sydney Convicts Try Left Wing", "Sydney Convicts")
