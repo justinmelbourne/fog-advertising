@@ -7,16 +7,17 @@ Sends keyframes to Gemini Vision (pattern from sport-video-AI-analysis) to class
 events from the actual footage. Anything Gemini can't confirm routes to Needs Review;
 nothing is ever filed as Fog positive by default.
 
-Official Kit Ground Truth:
---------------------------
+Kit Ground Truth (confirmed by the club):
+-----------------------------------------
 1. SF Fog RFC A-Side:
-   - Shirt: Deep Pitch Navy (#00243C) or Fog Blue (#006EB6) with vivid Rainbow Band across chest
+   - Shirt: SILVER with a rainbow marking
    - Shorts: White
 2. SF Fog RFC B-Side & C-Side:
-   - Shirt: Fog Blue (#006EB6) / Deep Pitch Navy (#00243C)
-   - Shorts: White or Black
+   - Shirt: patterned BLUE with a rainbow pattern
+   - Shorts: usually Black, sometimes White
 3. Opponents:
-   - Whatever kit is passed in per match; otherwise "the team not wearing Fog kit"
+   - Per match. engine/kit_check.py writes the observed kits into the manifest
+     after a human confirms one annotated frame; those override these defaults.
 
 Classification Hierarchy:
 -------------------------
@@ -105,7 +106,10 @@ def _gemini_request(payload: Dict[str, Any], api_key: Optional[str]) -> requests
         headers = {"x-goog-api-key": api_key or os.environ.get("GEMINI_API_KEY", "")}
     return requests.post(url, json=payload, headers=headers, timeout=30)
 
-DEFAULT_FOG_KIT = "SF Fog RFC: Deep navy or fog-blue jersey with prominent horizontal rainbow band across chest and white shorts (A-side), or solid blue/navy tops with white/black shorts (B/C side)"
+DEFAULT_FOG_KIT = (
+    "SF Fog RFC: A-side wears a SILVER jersey with a rainbow marking and WHITE shorts; "
+    "B and C sides wear a patterned BLUE jersey with a rainbow pattern and usually BLACK (sometimes white) shorts"
+)
 DEFAULT_OPPONENT_KIT = "Opposing Team: any kit that does NOT match the SF Fog kit described above"
 
 
@@ -233,7 +237,7 @@ YOUR TASK:
 Return ONLY a JSON object:
 {{
   "decisive_action": "Number 11 grounds the ball in the left corner",
-  "kit_observed": "navy shirt with rainbow chest band, white shorts",
+  "kit_observed": "silver shirt with rainbow marking, white shorts",
   "sentiment": "fog_positive" | "fog_negative" | "neutral",
   "team": "sf_fog" | "opponent" | "unknown",
   "team_display": "SF Fog RFC" | "{opponent_name}" | "Contested",
@@ -398,6 +402,7 @@ def classify_event_sentiment(
     video_path: Optional[str] = None,
     opponent_name: str = "Opponent",
     opponent_kit: Optional[str] = None,
+    fog_kit: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Convenience wrapper used by Cloud Run endpoints and job runners.
@@ -414,6 +419,7 @@ def classify_event_sentiment(
         event_dict,
         video_path=video_path,
         opponent_name=opponent_name,
+        fog_kit=fog_kit or DEFAULT_FOG_KIT,
         opponent_kit=opponent_kit or DEFAULT_OPPONENT_KIT,
     )
     return {

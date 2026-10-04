@@ -49,12 +49,44 @@ def test_organize_defaults_to_dry_run_and_never_trusts_unverified(client):
     assert drive.download_file_to_path.call_count == 1
 
 
-def test_organize_live_moves_to_needs_review(client):
+def test_organize_live_blocked_until_kit_check_confirmed(client):
     drive = _fake_drive()
     with patch.object(main, "DriveClient", return_value=drive):
+        body = client.post("/drive/organize-moments", json={"dry_run": False}).get_json()
+    drive.move_file.assert_not_called()
+    assert body["status"] == "blocked"
+    assert body["blocked_needs_kit_check"] == ["20260822_v4fb17b0_sf-fog-vs-sydney-convicts-1"]
+
+
+def test_organize_live_after_confirmation_uses_confirmed_kits(client):
+    drive = _fake_drive()
+    drive.read_manifest.return_value["kit_check"] = {
+        "fog_kit": "silver shirts, white shorts", "opponent_kit": "green hoops", "confirmed": True,
+    }
+    with patch.object(main, "DriveClient", return_value=drive), \
+         patch.object(main, "classify_event_sentiment", wraps=main.classify_event_sentiment) as spy:
         client.post("/drive/organize-moments", json={"dry_run": False})
     targets = {call.args[1] for call in drive.move_file.call_args_list}
-    assert targets == {"matchfolder/Needs Review"}
+    assert targets == {"matchfolder/Needs Review"}  # no Gemini in tests -> unverified
+    assert spy.call_args.kwargs["fog_kit"] == "silver shirts, white shorts"
+    assert spy.call_args.kwargs["opponent_kit"] == "green hoops"
+
+
+def test_kit_check_confirm_requires_kit_check(client):
+    drive = _fake_drive()
+    with patch.object(main, "DriveClient", return_value=drive):
+        resp = client.post("/kit-check/confirm", json={"match_id": "sydney-convicts-1"})
+    assert resp.status_code == 409
+
+
+def test_kit_check_confirm_swap(client):
+    drive = _fake_drive()
+    drive.read_manifest.return_value["kit_check"] = {"fog_kit": "A", "opponent_kit": "B", "confirmed": False}
+    with patch.object(main, "DriveClient", return_value=drive):
+        body = client.post("/kit-check/confirm", json={"match_id": "sydney-convicts-1", "swap": True}).get_json()
+    assert body == {"status": "confirmed", "match_id": "sydney-convicts-1", "fog_kit": "B", "opponent_kit": "A"}
+    saved = drive.write_manifest.call_args.args[0]
+    assert saved.kit_check["confirmed"] is True
 
 
 def test_highlights_build_requires_match_id(client):

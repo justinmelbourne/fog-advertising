@@ -1,5 +1,5 @@
 # engine/models.py
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 class VideoSource(BaseModel):
@@ -46,3 +46,6 @@ class Manifest(BaseModel):
     pitch: str = "Treasure Island Pitch 1, San Francisco"
     sources: List[VideoSource] = Field(default_factory=list)
     events: List[Event] = Field(default_factory=list)
+    opponent_name: Optional[str] = None
+    # Per-match kit calibration: {fog_kit, opponent_kit, confirmed, image_file_id, ...}
+    kit_check: Optional[Dict[str, Any]] = None

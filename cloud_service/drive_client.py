@@ -301,9 +301,8 @@ class DriveClient:
                 if status:
                     logger.debug("Download %d%%", int(status.progress() * 100))
 
-    def upload_file_to_folder(self, local_path: str, filename: str, folder_id: str) -> str:
+    def upload_file_to_folder(self, local_path: str, filename: str, folder_id: str, mime: str = "video/mp4") -> str:
         """Upload a local file to the given Drive folder. Returns file ID."""
-        mime = "video/mp4"
         metadata = {"name": filename, "parents": [folder_id]}
         with open(local_path, "rb") as f:
             media = MediaIoBaseUpload(f, mimetype=mime, resumable=True, chunksize=5 * 1024 * 1024)
@@ -315,13 +314,13 @@ class DriveClient:
         logger.info("Uploaded %s -> Drive %s (%s)", filename, folder_id, file["id"])
         return file["id"]
 
-    def upsert_file_to_folder(self, local_path: str, filename: str, folder_id: str) -> str:
+    def upsert_file_to_folder(self, local_path: str, filename: str, folder_id: str, mime: str = "video/mp4") -> str:
         """Replace the contents of an existing same-named file (keeps its ID/links), else upload new."""
         existing_id = self._find_file(filename, folder_id)
         if not existing_id:
-            return self.upload_file_to_folder(local_path, filename, folder_id)
+            return self.upload_file_to_folder(local_path, filename, folder_id, mime=mime)
         with open(local_path, "rb") as f:
-            media = MediaIoBaseUpload(f, mimetype="video/mp4", resumable=True, chunksize=5 * 1024 * 1024)
+            media = MediaIoBaseUpload(f, mimetype=mime, resumable=True, chunksize=5 * 1024 * 1024)
             self._service.files().update(
                 fileId=existing_id, media_body=media, fields="id", supportsAllDrives=True
             ).execute()

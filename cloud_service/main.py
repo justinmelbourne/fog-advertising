@@ -109,7 +109,8 @@ from engine.naming import (
     FOLDER_OPPOSING_TEAM,
     FOLDER_NEEDS_REVIEW,
 )
-from engine.team_analyzer import classify_event_sentiment
+from engine.team_analyzer import classify_event_sentiment, DEFAULT_FOG_KIT
+from engine.kit_check import extract_frame, detect_teams, draw_kit_check, confirmed_kits, apply_confirmation
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -636,6 +637,24 @@ def migrate_naming() -> Response:
 # stay in the primary moment structure.
 # ---------------------------------------------------------------------------
 
+def _load_match_manifest(drive: DriveClient, folder_id: str, folder_name: str) -> Optional[dict[str, Any]]:
+    manifest_data = drive.read_manifest(folder_name)
+    if not manifest_data:
+        for f in drive.list_all_files(folder_id):
+            if f["name"].endswith(".json"):
+                manifest_data = drive.read_manifest(f["name"])
+                if manifest_data:
+                    break
+    return manifest_data
+
+
+def _find_match_folder(drive: DriveClient, match_id: str) -> Optional[dict[str, Any]]:
+    for f in drive.list_all_files(drive._output_folder_id):
+        if f.get("mimeType") == "application/vnd.google-apps.folder" and match_id in f["name"]:
+            return f
+    return None
+
+
 def _event_id_from_clip_name(fname: str) -> Optional[str]:
     """Map 'veo_evt_034' or '..._try-034.mp4' clip names back to a manifest event id."""
     import re
@@ -666,6 +685,121 @@ def _probe_duration(path: str) -> float:
         return 20.0
 
 
+@app.route("/kit-check", methods=["POST"])
+def kit_check() -> Response:
+    """
+    Grab one wide frame for a match, box every player as Fog/opponent with Gemini,
+    save the annotated PNG to the match folder, and store the pending kit descriptions.
+    Body: {match_id, clip_name?: str, timestamp?: float}
+    """
+    data = request.get_json(silent=True) or {}
+    match_id = data.get("match_id")
+    if not match_id:
+        return jsonify({"error": "match_id is required"}), 400
+
+    try:
+        drive = DriveClient()
+        folder = _find_match_folder(drive, match_id)
+        if not folder:
+            return jsonify({"error": f"No match folder found for {match_id}"}), 404
+        manifest_data = _load_match_manifest(drive, folder["id"], folder["name"])
+        if not manifest_data:
+            return jsonify({"error": f"No manifest found for {match_id}"}), 404
+
+        clips = [f for f in drive.list_all_video_files_recursive(folder["id"]) if f["name"].endswith(".mp4")]
+        wanted = data.get("clip_name")
+        if wanted:
+            clips = [c for c in clips if c["name"] == wanted]
+        else:
+            # Set pieces put both teams in one frame; prefer the wide 16:9 cut
+            def rank(c: dict[str, Any]) -> tuple[int, int]:
+                n = c["name"].lower()
+                kind = 0 if "scrum" in n else 1 if "lineout" in n else 2
+                return (kind, 0 if "16x9" in n else 1)
+            clips.sort(key=rank)
+        if not clips:
+            return jsonify({"error": "No clips found in the match folder"}), 404
+        clip = clips[0]
+
+        _, _, opponent_slug = parse_match_identifiers(folder["name"])
+        opponent_name = manifest_data.get("opponent_name") or (
+            opponent_slug.replace("-", " ").title() if opponent_slug else "Opponent")
+
+        with tempfile.TemporaryDirectory(prefix="fog_kitcheck_") as tmpdir:
+            local_clip = os.path.join(tmpdir, "clip.mp4")
+            drive.download_file_to_path(clip["id"], local_clip)
+            ts = data.get("timestamp")
+            ts = float(ts) if ts is not None else _probe_duration(local_clip) * 0.4
+            frame = extract_frame(local_clip, ts, os.path.join(tmpdir, "frame.jpg"))
+            if not frame:
+                return jsonify({"error": "Could not extract a frame from the clip"}), 500
+
+            detection = detect_teams(frame, fog_kit=DEFAULT_FOG_KIT, opponent_name=opponent_name)
+            annotated = draw_kit_check(frame, detection, os.path.join(tmpdir, "kit_check.png"))
+
+            m_date, uid, _ = parse_match_identifiers(folder["name"])
+            png_name = f"{m_date}_{uid}_kit-check.png"
+            image_id = drive.upsert_file_to_folder(annotated, png_name, folder["id"], mime="image/png")
+
+        manifest_data["opponent_name"] = opponent_name
+        manifest_data["kit_check"] = {
+            "fog_kit": detection["fog_kit_observed"],
+            "opponent_kit": detection["opponent_kit_observed"],
+            "confirmed": False,
+            "source_clip": clip["name"],
+            "timestamp": round(ts, 2),
+            "image_file_id": image_id,
+            "players_fog": sum(1 for p in detection["players"] if p["team"] == "fog"),
+            "players_opponent": sum(1 for p in detection["players"] if p["team"] == "opponent"),
+        }
+        drive.write_manifest(Manifest.model_validate(manifest_data))
+
+        return jsonify({
+            "status": "awaiting_confirmation",
+            "match_id": match_id,
+            "image_url": f"https://drive.google.com/file/d/{image_id}/view",
+            "fog_kit_observed": detection["fog_kit_observed"],
+            "opponent_kit_observed": detection["opponent_kit_observed"],
+            "players": {"fog": manifest_data["kit_check"]["players_fog"],
+                        "opponent": manifest_data["kit_check"]["players_opponent"]},
+            "next": "POST /kit-check/confirm with {match_id, swap: false} if cyan = Fog, or swap: true if it's backwards",
+        })
+    except Exception as exc:
+        logger.exception("Kit check failed for %s: %s", match_id, exc)
+        return jsonify({"error": f"Kit check failed: {type(exc).__name__}"}), 500
+
+
+@app.route("/kit-check/confirm", methods=["POST"])
+def kit_check_confirm() -> Response:
+    """Body: {match_id, swap?: bool, fog_kit?: str, opponent_kit?: str}"""
+    data = request.get_json(silent=True) or {}
+    match_id = data.get("match_id")
+    if not match_id:
+        return jsonify({"error": "match_id is required"}), 400
+    try:
+        drive = DriveClient()
+        folder = _find_match_folder(drive, match_id)
+        if not folder:
+            return jsonify({"error": f"No match folder found for {match_id}"}), 404
+        manifest_data = _load_match_manifest(drive, folder["id"], folder["name"])
+        if not manifest_data or not manifest_data.get("kit_check"):
+            return jsonify({"error": "Run POST /kit-check for this match first"}), 409
+
+        manifest_data["kit_check"] = apply_confirmation(
+            manifest_data["kit_check"],
+            swap=bool(data.get("swap", False)),
+            fog_kit=data.get("fog_kit"),
+            opponent_kit=data.get("opponent_kit"),
+        )
+        drive.write_manifest(Manifest.model_validate(manifest_data))
+        kc = manifest_data["kit_check"]
+        return jsonify({"status": "confirmed", "match_id": match_id,
+                        "fog_kit": kc["fog_kit"], "opponent_kit": kc["opponent_kit"]})
+    except Exception as exc:
+        logger.exception("Kit check confirm failed for %s: %s", match_id, exc)
+        return jsonify({"error": f"Kit check confirm failed: {type(exc).__name__}"}), 500
+
+
 @app.route("/drive/organize-moments", methods=["POST"])
 def organize_moments() -> Response:
     import re
@@ -678,6 +812,7 @@ def organize_moments() -> Response:
     try:
         drive = DriveClient()
         changes = []
+        blocked: list[str] = []
 
         out_files = drive.list_all_files(drive._output_folder_id)
         match_folders = [
@@ -695,14 +830,15 @@ def organize_moments() -> Response:
             if match_filter and match_filter not in folder_name:
                 continue
 
-            manifest_data = drive.read_manifest(folder_name)
-            if not manifest_data:
-                mfiles = drive.list_all_files(folder_id)
-                for f in mfiles:
-                    if f["name"].endswith(".json"):
-                        manifest_data = drive.read_manifest(f["name"])
-                        if manifest_data:
-                            break
+            manifest_data = _load_match_manifest(drive, folder_id, folder_name)
+
+            # Real moves only after a human confirmed this match's kits (POST /kit-check/confirm)
+            kits = confirmed_kits(manifest_data)
+            if not dry_run and not kits:
+                blocked.append(folder_name)
+                continue
+            fog_kit = kits["fog_kit"] if kits else DEFAULT_FOG_KIT
+            match_opponent_kit = kits["opponent_kit"] if kits else opponent_kit
 
             events_by_id = {}
             if manifest_data and "events" in manifest_data:
@@ -793,7 +929,8 @@ def organize_moments() -> Response:
                                 end_time=clip_duration,
                                 video_path=local_clip,
                                 opponent_name=opponent_name,
-                                opponent_kit=opponent_kit,
+                                opponent_kit=match_opponent_kit,
+                                fog_kit=fog_kit,
                             )
                         finally:
                             if os.path.exists(local_clip):
@@ -861,10 +998,11 @@ def organize_moments() -> Response:
             key = c.get("sentiment", "highlight_reel")
             summary[key] = summary.get(key, 0) + 1
         return jsonify({
-            "status": "complete",
+            "status": "blocked" if blocked and not changes else "complete",
             "dry_run": dry_run,
             "organized_clips_count": len(changes),
             "summary": summary,
+            "blocked_needs_kit_check": blocked,
             "changes": changes,
         })
     except Exception as exc:
