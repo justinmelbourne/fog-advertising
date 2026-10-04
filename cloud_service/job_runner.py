@@ -505,7 +505,7 @@ def run_highlights_job(
                 "moments": [s["event_id"] for s in segments],
             }
 
-    report("complete", 100, "Highlights generated and saved to Drive!")
+    report("finalizing", 99, "Reels uploaded, finishing up...")
     return {"status": "complete", "match_id": match_id, "reels": uploaded_reels}
 
 

@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fog Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  /* Fog Rugby tokens (Rev 4). Jost = sanctioned off-platform fallback for Futura PT. */
+  :root {
+    --fog-blue: #006EB6; --fog-light-blue: #24A0F1; --fog-dark-blue: #00243C;
+    --fog-gray: #DCDDDE; --fog-gray-50: #F1F2F3; --fog-dark-gray: #141718; --fog-white: #FFFFFF;
+    --fog-green: #157A38; --fog-red: #C4321F;
+    --font: "Futura PT", "Jost", system-ui, sans-serif;
+    --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px; --space-7: 48px;
+    --focus-ring: 0 0 0 2px var(--fog-white), 0 0 0 4px var(--fog-blue);
+    --focus-ring-dark: 0 0 0 2px var(--fog-dark-blue), 0 0 0 4px var(--fog-white);
+    --motion-base: 200ms;
+  }
+  * { box-sizing: border-box; border-radius: 0; }
+  body { margin: 0; font-family: var(--font); font-size: 16px; line-height: 1.6; color: var(--fog-dark-gray); background: var(--fog-white); }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 clamp(16px, 5vw, 64px); }
+  header.hero { background: var(--fog-dark-blue); color: var(--fog-white); padding: var(--space-6) 0; }
+  .eyebrow { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; color: var(--fog-blue); margin: 0 0 var(--space-2); }
+  .hero .eyebrow { color: var(--fog-light-blue); }
+  h1 { font-size: clamp(2rem, 5vw, 3rem); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; line-height: 1.05; margin: 0; }
+  h2 { font-size: 1.5rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--fog-blue); margin: 0 0 var(--space-3); }
+  h3 { font-size: 1.125rem; font-weight: 600; margin: var(--space-4) 0 var(--space-2); color: var(--fog-dark-blue); }
+  .key-row { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; margin-top: var(--space-4); }
+  .key-row label { font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; }
+  input, select { font: inherit; font-size: 16px; padding: var(--space-2) var(--space-3); border: 1px solid var(--fog-gray); background: var(--fog-white); color: var(--fog-dark-gray); min-width: 0; }
+  .hero input { min-width: 240px; }
+  select { min-width: min(100%, 520px); }
+  .fog-button { font: inherit; font-weight: 700; font-size: 0.9375rem; letter-spacing: 0.05em; text-transform: uppercase;
+    padding: var(--space-3) var(--space-5); border: 2px solid transparent; cursor: pointer;
+    background: var(--fog-blue); color: var(--fog-white); transition: background-color var(--motion-base) ease, color var(--motion-base) ease; }
+  .fog-button:hover { background: var(--fog-dark-blue); }
+  .fog-button--secondary { background: var(--fog-white); color: var(--fog-dark-blue); border-color: var(--fog-dark-blue); }
+  .fog-button--secondary:hover { background: var(--fog-dark-blue); color: var(--fog-white); }
+  .fog-button--danger { background: var(--fog-red); }
+  .fog-button--danger:hover { background: var(--fog-dark-blue); }
+  .hero .fog-button { background: var(--fog-white); color: var(--fog-dark-blue); }
+  .hero .fog-button:hover { background: var(--fog-gray); }
+  .fog-button:disabled { opacity: 0.5; cursor: not-allowed; }
+  :focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .hero :focus-visible { box-shadow: var(--focus-ring-dark); }
+  section.step { border-top: 1px solid var(--fog-gray); padding: var(--space-6) 0; }
+  .step-head { display: flex; gap: var(--space-3); align-items: baseline; }
+  .step-num { display: inline-block; min-width: 32px; text-align: center; background: var(--fog-dark-blue); color: var(--fog-white); font-weight: 700; padding: 0 var(--space-2); }
+  .row { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center; }
+  .panel { background: var(--fog-gray-50); padding: var(--space-5); margin-top: var(--space-4); }
+  .muted { color: var(--fog-dark-gray); opacity: 0.8; font-size: 0.875rem; }
+  .fog-tag { display: inline-block; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; padding: var(--space-1) var(--space-3); background: var(--fog-gray); color: var(--fog-dark-gray); white-space: nowrap; }
+  .fog-tag--fog { background: var(--fog-green); color: var(--fog-white); }
+  .fog-tag--opp { background: var(--fog-red); color: var(--fog-white); }
+  .fog-tag--accent { background: var(--fog-blue); color: var(--fog-white); }
+  .progress { height: 12px; background: var(--fog-gray); margin: var(--space-3) 0; }
+  .progress > div { height: 100%; width: 0; background: var(--fog-blue); transition: width var(--motion-base) ease; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-3); margin: var(--space-4) 0; }
+  .tile { background: var(--fog-white); border: 1px solid var(--fog-gray); padding: var(--space-4); }
+  .tile .n { font-size: 2rem; font-weight: 700; color: var(--fog-dark-blue); line-height: 1; }
+  .tile .l { font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; margin-top: var(--space-2); }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.875rem; background: var(--fog-white); }
+  th, td { text-align: left; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--fog-gray); vertical-align: top; }
+  th { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fog-dark-blue); }
+  .filters { display: flex; gap: var(--space-2); flex-wrap: wrap; margin: var(--space-3) 0; }
+  .filters button { font: inherit; font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--fog-dark-blue); background: var(--fog-white); color: var(--fog-dark-blue); cursor: pointer; }
+  .filters button[aria-pressed="true"] { background: var(--fog-dark-blue); color: var(--fog-white); }
+  .kit-img { width: 100%; height: auto; display: block; border: 1px solid var(--fog-gray); margin-top: var(--space-3); }
+  .msg { margin-top: var(--space-3); padding: var(--space-3) var(--space-4); border-left: 4px solid var(--fog-blue); background: var(--fog-white); }
+  .msg--error { border-color: var(--fog-red); }
+  .msg--ok { border-color: var(--fog-green); }
+  .hidden { display: none !important; }
+  a:link, a:visited { color: var(--fog-blue); text-underline-offset: 0.15em; }
+  a:hover { color: var(--fog-dark-blue); text-decoration-thickness: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { transition-duration: 0s !important; } }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">SF Fog RFC · match footage</p>
+    <h1>Fog Studio</h1>
+    <div class="key-row">
+      <label for="apiKey">Club key</label>
+      <input id="apiKey" type="password" autocomplete="off" placeholder="Paste the club key once">
+      <button class="fog-button" id="saveKey" type="button">Save</button>
+      <span id="keyState" class="muted" style="color:#fff"></span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="step">
+    <div class="step-head"><span class="step-num">1</span><h2>Pick a match</h2></div>
+    <div class="row">
+      <label class="sr-only hidden" for="matchSelect">Match</label>
+      <select id="matchSelect"><option value="">Loading matches…</option></select>
+      <button class="fog-button fog-button--secondary" id="reloadMatches" type="button">Refresh</button>
+    </div>
+    <div id="matchStatus" class="row" style="margin-top:12px"></div>
+  </section>
+
+  <section class="step">
+    <div class="step-head"><span class="step-num">2</span><h2>Kit check</h2></div>
+    <p>One frame from the match with every player boxed. <strong>Cyan = Fog</strong>, red = opponent. Tell it if it got it right.</p>
+    <div class="row">
+      <button class="fog-button" id="runKit" type="button">Run kit check</button>
+      <span id="kitBusy" class="muted hidden">Grabbing a frame and asking Gemini… about 30 seconds</span>
+    </div>
+    <div id="kitPanel" class="panel hidden">
+      <img id="kitImg" class="kit-img" alt="Match frame with players boxed by team">
+      <h3>What it saw</h3>
+      <p><span class="fog-tag fog-tag--accent">Fog</span> <span id="kitFog"></span></p>
+      <p><span class="fog-tag">Opponent</span> <span id="kitOpp"></span></p>
+      <div class="row">
+        <button class="fog-button" id="kitCorrect" type="button">Correct: cyan is Fog</button>
+        <button class="fog-button fog-button--secondary" id="kitSwap" type="button">Swap: it's backwards</button>
+      </div>
+      <div id="kitState"></div>
+    </div>
+  </section>
+
+  <section class="step">
+    <div class="step-head"><span class="step-num">3</span><h2>Sort the clips</h2></div>
+    <p>Dry run checks every clip and shows where it would go. Nothing moves until you press <strong>Apply</strong>.</p>
+    <div class="row">
+      <button class="fog-button" id="runDry" type="button">Dry run</button>
+      <button class="fog-button fog-button--danger" id="runApply" type="button" disabled>Apply to Drive</button>
+      <span id="applyHint" class="muted">Apply unlocks after the kit check is confirmed and a dry run has finished.</span>
+    </div>
+    <div id="sortProgress" class="hidden">
+      <div class="progress"><div id="sortBar"></div></div>
+      <div id="sortText" class="muted"></div>
+    </div>
+    <div id="sortResults" class="hidden">
+      <div class="tiles">
+        <div class="tile"><div class="n" id="tFog">0</div><div class="l">Fog moments</div></div>
+        <div class="tile"><div class="n" id="tOpp">0</div><div class="l">Opponent</div></div>
+        <div class="tile"><div class="n" id="tRev">0</div><div class="l">Needs review</div></div>
+      </div>
+      <div class="filters" role="group" aria-label="Filter clips">
+        <button type="button" data-f="all" aria-pressed="true">All</button>
+        <button type="button" data-f="fog_positive" aria-pressed="false">Fog</button>
+        <button type="button" data-f="fog_negative" aria-pressed="false">Opponent</button>
+        <button type="button" data-f="neutral" aria-pressed="false">Needs review</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Clip</th><th>Verdict</th><th>Conf.</th><th>Goes to</th><th>Why</th></tr></thead>
+          <tbody id="sortRows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="sortMsg"></div>
+  </section>
+
+  <section class="step">
+    <div class="step-head"><span class="step-num">4</span><h2>Build highlights</h2></div>
+    <p>Uses only clips the AI scored Fog positive at 75%+ confidence, tries first, in match order.</p>
+    <div class="row">
+      <label><input type="checkbox" id="f169" checked> 16:9 broadcast</label>
+      <label><input type="checkbox" id="f916" checked> 9:16 social</label>
+      <label>Max moments <input type="number" id="maxMoments" value="8" min="1" max="20" style="width:80px"></label>
+      <button class="fog-button" id="runReel" type="button">Build reels</button>
+    </div>
+    <div id="reelProgress" class="hidden">
+      <div class="progress"><div id="reelBar"></div></div>
+      <div id="reelText" class="muted"></div>
+    </div>
+    <div id="reelMsg"></div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const KEY_STORE = "fogStudioKey";
+  let currentMatch = "";
+  let kitConfirmed = false;
+  let dryRunDone = false;
+  let lastChanges = [];
+  let filter = "all";
+  let statusSeq = 0;  // discard status replies that a newer request has superseded
+
+  const readKey = () => { try { return localStorage.getItem(KEY_STORE) || ""; } catch (e) { return ""; } };
+  const writeKey = (v) => { try { localStorage.setItem(KEY_STORE, v); } catch (e) { /* private mode */ } };
+
+  async function api(path, opts = {}) {
+    const headers = Object.assign({ "X-Fog-Api-Key": $("apiKey").value || readKey() }, opts.headers || {});
+    if (opts.body && typeof opts.body !== "string") { headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(opts.body); }
+    const res = await fetch(path, Object.assign({}, opts, { headers }));
+    if (res.status === 401) throw new Error("The club key is missing or wrong.");
+    const ct = res.headers.get("content-type") || "";
+    const data = ct.includes("json") ? await res.json() : await res.blob();
+    if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+    return data;
+  }
+
+  function message(target, text, kind) {
+    const el = $(target);
+    el.textContent = "";
+    if (!text) return;
+    const box = document.createElement("div");
+    box.className = "msg" + (kind ? " msg--" + kind : "");
+    box.textContent = text;
+    el.appendChild(box);
+  }
+
+  function tag(text, kind) {
+    const s = document.createElement("span");
+    s.className = "fog-tag" + (kind ? " fog-tag--" + kind : "");
+    s.textContent = text;
+    return s;
+  }
+
+  const verdictTag = (s) => s === "fog_positive" ? tag("Fog", "fog") : s === "fog_negative" ? tag("Opponent", "opp") : s ? tag("Needs review") : tag("Reel", "accent");
+
+  function updateApply() {
+    $("runApply").disabled = !(kitConfirmed && dryRunDone);
+    $("applyHint").textContent = !kitConfirmed ? "Apply unlocks after the kit check is confirmed." :
+      !dryRunDone ? "Run a dry run first, check the list, then apply." : "Ready. This moves files in Drive.";
+  }
+
+  async function pollJob(jobId, bar, text, onDone) {
+    for (;;) {
+      await new Promise(r => setTimeout(r, 3000));
+      let job;
+      try { job = await api(`/jobs/${encodeURIComponent(jobId)}`); } catch (e) { text.textContent = e.message; continue; }
+      bar.style.width = (job.progress_pct || 0) + "%";
+      text.textContent = job.stage_description || job.stage || "";
+      if (job.stage === "complete" || job.stage === "error") { onDone(job); return; }
+    }
+  }
+
+  async function loadMatches() {
+    const sel = $("matchSelect");
+    sel.textContent = "";
+    const loading = document.createElement("option");
+    loading.textContent = "Loading matches…";
+    sel.appendChild(loading);
+    try {
+      const data = await api("/api/matches");
+      sel.textContent = "";
+      const ph = document.createElement("option");
+      ph.value = ""; ph.textContent = `Choose a match (${data.matches.length})`;
+      sel.appendChild(ph);
+      data.matches.forEach(m => {
+        const o = document.createElement("option");
+        o.value = m.name; o.textContent = m.name;
+        sel.appendChild(o);
+      });
+    } catch (e) {
+      sel.textContent = "";
+      const o = document.createElement("option"); o.textContent = "Couldn't load matches"; sel.appendChild(o);
+      message("sortMsg", e.message, "error");
+    }
+  }
+
+  async function loadStatus(reset = true) {
+    const box = $("matchStatus");
+    if (reset) {
+      kitConfirmed = false; dryRunDone = false; updateApply();
+      $("kitPanel").classList.add("hidden");
+      $("sortResults").classList.add("hidden");
+    }
+    if (!currentMatch) { box.textContent = ""; return; }
+    const seq = ++statusSeq;
+    try {
+      const st = await api(`/api/match-status?match_id=${encodeURIComponent(currentMatch)}`);
+      if (seq !== statusSeq) return;
+      box.textContent = "";
+      const kc = st.kit_check;
+      kitConfirmed = !!(kc && kc.confirmed);
+      box.appendChild(tag(`${st.events} moments`, "accent"));
+      box.appendChild(kc ? (kc.confirmed ? tag("Kit confirmed", "fog") : tag("Kit check waiting")) : tag("No kit check yet"));
+      Object.entries(st.sentiment_counts || {}).forEach(([k, v]) => {
+        const t = verdictTag(k); t.textContent = `${t.textContent}: ${v}`; box.appendChild(t);
+      });
+      if (kc && reset) showKit(kc);
+      updateApply();
+    } catch (e) { message("sortMsg", e.message, "error"); }
+  }
+
+  async function showKit(kc) {
+    $("kitFog").textContent = kc.fog_kit || kc.fog_kit_observed || "";
+    $("kitOpp").textContent = kc.opponent_kit || kc.opponent_kit_observed || "";
+    $("kitPanel").classList.remove("hidden");
+    $("kitState").textContent = "";
+    if (kc.confirmed) message("kitState", "Confirmed. Every clip in this match is judged against these kits.", "ok");
+    try {
+      const blob = await api(`/kit-check/image?match_id=${encodeURIComponent(currentMatch)}`);
+      const old = $("kitImg").src; if (old.startsWith("blob:")) URL.revokeObjectURL(old);
+      $("kitImg").src = URL.createObjectURL(blob);
+    } catch (e) { message("kitState", e.message, "error"); }
+  }
+
+  $("saveKey").addEventListener("click", () => { writeKey($("apiKey").value); $("keyState").textContent = "Saved on this device"; loadMatches(); });
+  $("reloadMatches").addEventListener("click", loadMatches);
+  $("matchSelect").addEventListener("change", (e) => { currentMatch = e.target.value; loadStatus(); });
+
+  $("runKit").addEventListener("click", async () => {
+    if (!currentMatch) return message("kitState", "Pick a match first.", "error");
+    const lock = (v) => ["runKit", "kitCorrect", "kitSwap"].forEach(id => { $(id).disabled = v; });
+    lock(true); $("kitBusy").classList.remove("hidden");
+    try {
+      const r = await api("/kit-check", { method: "POST", body: { match_id: currentMatch } });
+      kitConfirmed = false; updateApply();
+      await showKit({ fog_kit: r.fog_kit_observed, opponent_kit: r.opponent_kit_observed, confirmed: false });
+      loadStatus(false);
+    } catch (e) { $("kitPanel").classList.remove("hidden"); message("kitState", e.message, "error"); }
+    finally { lock(false); $("kitBusy").classList.add("hidden"); }
+  });
+
+  async function confirmKit(swap) {
+    try {
+      const r = await api("/kit-check/confirm", { method: "POST", body: { match_id: currentMatch, swap } });
+      kitConfirmed = true; updateApply();
+      $("kitFog").textContent = r.fog_kit; $("kitOpp").textContent = r.opponent_kit;
+      message("kitState", swap ? "Swapped and confirmed." : "Confirmed.", "ok");
+      loadStatus(false);
+    } catch (e) { message("kitState", e.message, "error"); }
+  }
+  $("kitCorrect").addEventListener("click", () => confirmKit(false));
+  $("kitSwap").addEventListener("click", () => confirmKit(true));
+
+  function renderRows() {
+    const body = $("sortRows");
+    body.textContent = "";
+    lastChanges
+      .filter(c => !c.file_name.includes("9x16"))
+      .filter(c => filter === "all" || c.sentiment === filter)
+      .forEach(c => {
+        const tr = document.createElement("tr");
+        const cell = (content) => { const td = document.createElement("td"); if (content instanceof Node) td.appendChild(content); else td.textContent = content; tr.appendChild(td); };
+        cell(c.file_name.replace(/^\d{8}_[^_]+_fog-rugby_16x9_/, ""));
+        cell(verdictTag(c.sentiment));
+        cell(c.confidence != null ? Math.round(c.confidence * 100) + "%" : "");
+        cell((c.target_folder || "").split("/").slice(1).join(" / "));
+        cell(c.rationale || "");
+        body.appendChild(tr);
+      });
+  }
+  document.querySelectorAll(".filters button").forEach(b => b.addEventListener("click", () => {
+    filter = b.dataset.f;
+    document.querySelectorAll(".filters button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    renderRows();
+  }));
+
+  async function runSort(dry) {
+    if (!currentMatch) return message("sortMsg", "Pick a match first.", "error");
+    if (!dry && !confirm(`Move every clip in ${currentMatch} into its folder in Drive?`)) return;
+    message("sortMsg", "");
+    $("runDry").disabled = true; $("runApply").disabled = true;
+    $("sortProgress").classList.remove("hidden"); $("sortBar").style.width = "0";
+    try {
+      const start = await api("/drive/organize-moments", { method: "POST", body: { match_id: currentMatch, dry_run: dry, background: true } });
+      await pollJob(start.job_id, $("sortBar"), $("sortText"), (job) => {
+        if (job.stage === "error") return message("sortMsg", job.error, "error");
+        const r = job.result || {};
+        if (r.status === "blocked") return message("sortMsg", "Blocked: confirm the kit check for this match first.", "error");
+        lastChanges = r.changes || [];
+        const sm = r.summary || {};
+        const half = (n) => Math.ceil((n || 0) / 2);
+        $("tFog").textContent = half(sm.fog_positive); $("tOpp").textContent = half(sm.fog_negative); $("tRev").textContent = half(sm.neutral);
+        $("sortResults").classList.remove("hidden");
+        renderRows();
+        if (dry) { dryRunDone = true; message("sortMsg", "Dry run done. Nothing moved. Check the list, then Apply.", "ok"); }
+        else { message("sortMsg", "Applied. Files are in their folders in Drive.", "ok"); loadStatus(false); }
+      });
+    } catch (e) { message("sortMsg", e.message, "error"); }
+    finally { $("runDry").disabled = false; updateApply(); }
+  }
+  $("runDry").addEventListener("click", () => runSort(true));
+  $("runApply").addEventListener("click", () => runSort(false));
+
+  $("runReel").addEventListener("click", async () => {
+    if (!currentMatch) return message("reelMsg", "Pick a match first.", "error");
+    const formats = [$("f169").checked && "16:9", $("f916").checked && "9:16"].filter(Boolean);
+    if (!formats.length) return message("reelMsg", "Choose at least one format.", "error");
+    message("reelMsg", ""); $("runReel").disabled = true;
+    $("reelProgress").classList.remove("hidden"); $("reelBar").style.width = "0";
+    try {
+      const start = await api("/highlights/build", { method: "POST", body: {
+        match_id: currentMatch, formats, max_moments: Number($("maxMoments").value) || 8, stream: false } });
+      await pollJob(start.job_id, $("reelBar"), $("reelText"), (job) => {
+        if (job.stage === "error") return message("reelMsg", job.error, "error");
+        const el = $("reelMsg"); el.textContent = "";
+        Object.entries(job.reels || {}).forEach(([fmt, r]) => {
+          const p = document.createElement("p");
+          const a = document.createElement("a");
+          a.href = r.url; a.target = "_blank"; a.rel = "noopener";
+          a.textContent = `${fmt} reel: ${r.name}`;
+          p.appendChild(a); el.appendChild(p);
+        });
+      });
+    } catch (e) { message("reelMsg", e.message, "error"); }
+    finally { $("runReel").disabled = false; }
+  });
+
+  $("apiKey").value = readKey();
+  fetch("/studio/config").then(r => r.json()).then(c => {
+    $("keyState").textContent = c.auth_required ? (readKey() ? "Key saved on this device" : "Enter the club key") : "Warning: no club key set on the server; the service is open";
+  }).catch(() => {});
+  loadMatches();
+})();
+</script>
+</body>
+</html>

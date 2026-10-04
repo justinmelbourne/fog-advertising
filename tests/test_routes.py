@@ -100,3 +100,43 @@ def test_api_key_gate(monkeypatch):
     assert c.post("/highlights/build", json={}).status_code == 401
     assert c.get("/drive/debug").status_code == 401
     assert c.post("/highlights/build", json={}, headers={"X-Fog-Api-Key": "s3cret"}).status_code == 400
+
+
+def test_studio_page_is_public_and_has_no_data(client, monkeypatch):
+    monkeypatch.setenv("FOG_API_KEY", "s3cret")
+    c = main.app.test_client()
+    resp = c.get("/studio")
+    assert resp.status_code == 200 and b"Fog Studio" in resp.data
+    assert c.get("/studio/config").get_json() == {"auth_required": True}
+
+
+def test_data_endpoints_need_key(monkeypatch):
+    monkeypatch.setenv("FOG_API_KEY", "s3cret")
+    c = main.app.test_client()
+    assert c.get("/api/matches").status_code == 401
+    assert c.get("/api/match-status?match_id=x").status_code == 401
+    assert c.get("/kit-check/image?match_id=x").status_code == 401
+
+
+def test_api_matches_lists_folders(client):
+    drive = _fake_drive()
+    with patch.object(main, "DriveClient", return_value=drive):
+        body = client.get("/api/matches").get_json()
+    assert body == {"matches": [{"id": "matchfolder", "name": "20260822_v4fb17b0_sf-fog-vs-sydney-convicts-1"}]}
+
+
+def test_organize_background_job_completes(client):
+    import time as _t
+    drive = _fake_drive()
+    with patch.object(main, "DriveClient", return_value=drive):
+        start = client.post("/drive/organize-moments", json={"background": True})
+        assert start.status_code == 202
+        job_id = start.get_json()["job_id"]
+        for _ in range(100):
+            job = client.get(f"/jobs/{job_id}").get_json()
+            if job["stage"] in ("complete", "error"):
+                break
+            _t.sleep(0.05)
+    assert job["stage"] == "complete", job
+    assert job["result"]["summary"] == {"neutral": 2}
+    drive.move_file.assert_not_called()

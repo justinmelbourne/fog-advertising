@@ -46,7 +46,7 @@ steps:
       - '--no-cpu-throttling'
       # Gemini via Vertex AI as fog-video-sa (club project billing, no API key)
       - '--set-env-vars=GOOGLE_CLOUD_PROJECT=sffog-video-analysis,GEMINI_BACKEND=vertex,GEMINI_MODEL=gemini-3.8-flash,VERTEX_LOCATION=global'
-      - '--set-secrets=VEO_API_TOKEN=veo-api-token:latest,DRIVE_INGEST_FOLDER_ID=drive-ingest-folder-id:latest,DRIVE_OUTPUT_FOLDER_ID=drive-output-folder-id:latest'
+      - '--set-secrets=FOG_API_KEY=fog-api-key:latest,VEO_API_TOKEN=veo-api-token:latest,DRIVE_INGEST_FOLDER_ID=drive-ingest-folder-id:latest,DRIVE_OUTPUT_FOLDER_ID=drive-output-folder-id:latest'
       - '--allow-unauthenticated'
 
 images:
