@@ -130,6 +130,36 @@ class TestTeamAnalyzer(unittest.TestCase):
         self.assertEqual(res["team_display"], "Sydney Convicts")
         self.assertAlmostEqual(res["sentiment_confidence"], 0.98)
 
+class TestVertexBackend(unittest.TestCase):
+    @patch.dict("os.environ", {"GOOGLE_CLOUD_PROJECT": "sffog-video-analysis", "GEMINI_MODEL": "m1"}, clear=True)
+    @patch("engine.team_analyzer._vertex_access_token", return_value="sa-token")
+    @patch("engine.team_analyzer.requests.post")
+    def test_vertex_uses_service_account_not_key(self, mock_post, _tok):
+        mock_post.return_value = MagicMock(json=MagicMock(return_value={
+            "candidates": [{"content": {"parts": [{"text": '{"sentiment": "fog_positive", "confidence": 0.9}'}]}}]
+        }))
+        res = classify_moment_with_gemini(["/tmp/fake_frame.jpg"], "try")
+        url = mock_post.call_args.args[0]
+        headers = mock_post.call_args.kwargs["headers"]
+        self.assertEqual(
+            url,
+            "https://aiplatform.googleapis.com/v1/projects/sffog-video-analysis/locations/global/publishers/google/models/m1:generateContent",
+        )
+        self.assertEqual(headers, {"Authorization": "Bearer sa-token"})
+        self.assertEqual(res["sentiment"], "fog_positive")
+        self.assertEqual(res["classified_by"], "gemini:vertex:m1")
+
+    @patch.dict("os.environ", {"GOOGLE_CLOUD_PROJECT": "p", "GEMINI_API_KEY": "k", "GEMINI_BACKEND": "vertex"}, clear=True)
+    def test_explicit_backend_wins_over_key(self):
+        from engine.team_analyzer import gemini_backend
+        self.assertEqual(gemini_backend(), "vertex")
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_no_backend_needs_review(self):
+        res = classify_moment_with_gemini(["/tmp/fake_frame.jpg"], "try")
+        self.assertEqual(res["sentiment"], "neutral")
+
+
 class TestGeminiErrorLogging(unittest.TestCase):
     @patch("engine.team_analyzer.requests.post")
     def test_http_error_logs_status_without_key(self, mock_post):

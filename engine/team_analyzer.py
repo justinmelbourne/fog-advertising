@@ -47,14 +47,63 @@ from typing import Dict, Any, Optional, List, Tuple
 logger = logging.getLogger(__name__)
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+VERTEX_API_BASE = "https://aiplatform.googleapis.com/v1"
 # Model is configurable so a Google model retirement never silently breaks sorting.
+# Set GEMINI_MODEL explicitly in deploy config; this is only the fallback.
 DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
+VERTEX_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+_vertex_credentials = None
 CONFIDENCE_THRESHOLD = 0.75
 VALID_SENTIMENTS = ("fog_positive", "fog_negative", "neutral")
 
 
 def gemini_model() -> str:
     return os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+
+
+def gemini_backend(api_key: Optional[str] = None) -> str:
+    """
+    'vertex'  -> Vertex AI as the runtime service account (club GCP project billing, no key).
+    'api_key' -> Gemini Developer API with GEMINI_API_KEY (local dev / legacy).
+    Explicit GEMINI_BACKEND wins; otherwise a key means api_key, a project means vertex.
+    """
+    explicit = os.environ.get("GEMINI_BACKEND", "").strip().lower()
+    if explicit in ("vertex", "api_key"):
+        return explicit
+    if api_key or os.environ.get("GEMINI_API_KEY"):
+        return "api_key"
+    if os.environ.get("GOOGLE_CLOUD_PROJECT"):
+        return "vertex"
+    return "none"
+
+
+def _vertex_access_token() -> str:
+    """Short-lived OAuth token for the service account Cloud Run runs as (ADC)."""
+    global _vertex_credentials
+    import google.auth
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+
+    if _vertex_credentials is None:
+        _vertex_credentials, _ = google.auth.default(scopes=VERTEX_SCOPES)
+    if not _vertex_credentials.valid:
+        _vertex_credentials.refresh(GoogleAuthRequest())
+    return _vertex_credentials.token
+
+
+def _gemini_request(payload: Dict[str, Any], api_key: Optional[str]) -> requests.Response:
+    """POST generateContent to whichever backend is configured. Never puts secrets in URLs."""
+    model = gemini_model()
+    if gemini_backend(api_key) == "vertex":
+        project = os.environ["GOOGLE_CLOUD_PROJECT"]
+        location = os.environ.get("VERTEX_LOCATION", "global")
+        url = f"{VERTEX_API_BASE}/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent"
+        if location != "global":
+            url = url.replace("https://aiplatform", f"https://{location}-aiplatform", 1)
+        headers = {"Authorization": f"Bearer {_vertex_access_token()}"}
+    else:
+        url = f"{GEMINI_API_BASE}/{model}:generateContent"
+        headers = {"x-goog-api-key": api_key or os.environ.get("GEMINI_API_KEY", "")}
+    return requests.post(url, json=payload, headers=headers, timeout=30)
 
 DEFAULT_FOG_KIT = "SF Fog RFC: Deep navy or fog-blue jersey with prominent horizontal rainbow band across chest and white shorts (A-side), or solid blue/navy tops with white/black shorts (B/C side)"
 DEFAULT_OPPONENT_KIT = "Opposing Team: any kit that does NOT match the SF Fog kit described above"
@@ -123,12 +172,11 @@ def classify_moment_with_gemini(
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Send extracted keyframes to Gemini 2.0 Flash Vision to determine if the rugby play
-    is a Fog Positive moment, an Opposing Team moment, or neutral.
+    Send extracted keyframes to Gemini Vision (Vertex AI or API key backend) to decide
+    if the play is a Fog Positive moment, an Opposing Team moment, or neutral.
     """
-    gemini_key = api_key or os.environ.get("GEMINI_API_KEY", "")
-    if not gemini_key:
-        logger.warning("GEMINI_API_KEY not set. Falling back to heuristic tag evaluation.")
+    if gemini_backend(api_key) == "none":
+        logger.warning("No Gemini backend configured (set GOOGLE_CLOUD_PROJECT or GEMINI_API_KEY). Routing to Needs Review.")
         return fallback_heuristic_classification(event_type, event_description, opponent_name)
 
     if not keyframe_paths:
@@ -180,7 +228,7 @@ Return ONLY a JSON object in this format:
                 logger.warning("Could not encode frame %s: %s", frame_path, e)
 
     payload = {
-        "contents": [{"parts": parts}],
+        "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {
             "temperature": 0.1,
             "responseMimeType": "application/json"
@@ -188,9 +236,7 @@ Return ONLY a JSON object in this format:
     }
 
     try:
-        # Key goes in a header, never the URL, so it can't leak into exception text or logs.
-        url = f"{GEMINI_API_BASE}/{gemini_model()}:generateContent"
-        resp = requests.post(url, json=payload, headers={"x-goog-api-key": gemini_key}, timeout=30)
+        resp = _gemini_request(payload, api_key)
         resp.raise_for_status()
         data = resp.json()
 
@@ -215,7 +261,7 @@ Return ONLY a JSON object in this format:
                     "sentiment_rationale": parsed.get("rationale", ""),
                     "team": parsed.get("team", default_team) if sentiment != "neutral" else "unknown",
                     "team_display": parsed.get("team_display", default_display) if sentiment != "neutral" else "Contested",
-                    "classified_by": f"gemini:{gemini_model()}",
+                    "classified_by": f"gemini:{gemini_backend(api_key)}:{gemini_model()}",
                 }
 
     except requests.HTTPError as exc:
@@ -227,8 +273,8 @@ Return ONLY a JSON object in this format:
         except Exception:
             pass
         logger.warning(
-            "Gemini classification failed: HTTP %s %s (model=%s). Routing to Needs Review.",
-            status_code, google_status, gemini_model(),
+            "Gemini classification failed: HTTP %s %s (backend=%s model=%s). Routing to Needs Review.",
+            status_code, google_status, gemini_backend(api_key), gemini_model(),
         )
     except Exception as exc:
         logger.warning("Gemini classification request failed (%s). Routing to Needs Review.", type(exc).__name__)

@@ -23,7 +23,10 @@ Environment Variables (set via Secret Manager in Cloud Run):
   DRIVE_INGEST_FOLDER_ID   - Google Drive folder ID for game day ingest
   DRIVE_OUTPUT_FOLDER_ID   - Google Drive folder ID for social-ready clips
   GCS_BUCKET               - Cloud Storage bucket for proxy previews
-  GEMINI_API_KEY           - Gemini API key
+  GEMINI_BACKEND           - "vertex" (service account, club billing) or "api_key"
+  GEMINI_MODEL             - Gemini model id (e.g. gemini-3.8-flash)
+  GEMINI_API_KEY           - Only for GEMINI_BACKEND=api_key (local dev)
+  FOG_API_KEY              - Optional: require X-Fog-Api-Key on POST routes
   VEO_API_TOKEN            - Optional Veo API bearer token (for private recordings)
 """
 
