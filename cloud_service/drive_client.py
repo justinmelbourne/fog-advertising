@@ -315,6 +315,19 @@ class DriveClient:
         logger.info("Uploaded %s -> Drive %s (%s)", filename, folder_id, file["id"])
         return file["id"]
 
+    def upsert_file_to_folder(self, local_path: str, filename: str, folder_id: str) -> str:
+        """Replace the contents of an existing same-named file (keeps its ID/links), else upload new."""
+        existing_id = self._find_file(filename, folder_id)
+        if not existing_id:
+            return self.upload_file_to_folder(local_path, filename, folder_id)
+        with open(local_path, "rb") as f:
+            media = MediaIoBaseUpload(f, mimetype="video/mp4", resumable=True, chunksize=5 * 1024 * 1024)
+            self._service.files().update(
+                fileId=existing_id, media_body=media, fields="id", supportsAllDrives=True
+            ).execute()
+        logger.info("Replaced %s in Drive %s (%s)", filename, folder_id, existing_id)
+        return existing_id
+
     def get_or_create_subfolder(self, parent_folder_id: str, folder_name: str) -> str:
         """
         Ensures a subfolder named folder_name exists in parent_folder_id.

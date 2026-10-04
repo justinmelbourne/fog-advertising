@@ -30,6 +30,7 @@ Environment Variables (set via Secret Manager in Cloud Run):
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 import uuid
@@ -103,6 +104,7 @@ from engine.naming import (
     FOLDER_KICKS,
     FOLDER_GENERAL,
     FOLDER_OPPOSING_TEAM,
+    FOLDER_NEEDS_REVIEW,
 )
 from engine.team_analyzer import classify_event_sentiment
 
@@ -124,6 +126,27 @@ def add_cors_headers(response: Response) -> Response:
         "Content-Type, Authorization, X-Fog-Api-Key"
     )
     return response
+
+
+_PROTECTED_GET_PATHS = ("/drive/debug",)
+
+
+@app.before_request
+def require_api_key() -> Optional[Response]:
+    """
+    When FOG_API_KEY is set (Secret Manager), every mutating request and the Drive
+    debug listing must carry a matching X-Fog-Api-Key header. Unset = open (legacy).
+    """
+    import hmac
+    expected = os.environ.get("FOG_API_KEY", "")
+    if not expected or request.method == "OPTIONS":
+        return None
+    if request.method == "GET" and request.path not in _PROTECTED_GET_PATHS:
+        return None
+    provided = request.headers.get("X-Fog-Api-Key", "")
+    if not hmac.compare_digest(provided.encode(), expected.encode()):
+        return jsonify({"error": "unauthorized"}), 401
+    return None
 
 
 @app.before_request
@@ -610,12 +633,44 @@ def migrate_naming() -> Response:
 # stay in the primary moment structure.
 # ---------------------------------------------------------------------------
 
+def _event_id_from_clip_name(fname: str) -> Optional[str]:
+    """Map 'veo_evt_034' or '..._try-034.mp4' clip names back to a manifest event id."""
+    import re
+    m = re.search(r"(veo_evt_\d+)", fname)
+    if m:
+        return m.group(1)
+    m = re.search(r"-(\d{3,4})\.mp4$", fname)
+    return f"veo_evt_{m.group(1)}" if m else None
+
+
+def _event_type_from_clip_name(fname: str) -> str:
+    lower = fname.lower()
+    for candidate in ("try", "scrum", "lineout", "conversion", "kick"):
+        if f"_{candidate}" in lower or f"-{candidate}" in lower:
+            return candidate
+    return ""
+
+
+def _probe_duration(path: str) -> float:
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path],
+            capture_output=True, text=True, timeout=30,
+        ).stdout.strip()
+        return float(out) if out else 20.0
+    except Exception:
+        return 20.0
+
+
 @app.route("/drive/organize-moments", methods=["POST"])
 def organize_moments() -> Response:
     import re
     data = request.get_json(silent=True) or {}
     match_filter = data.get("match_id")
-    dry_run = data.get("dry_run", False)
+    # Safe by default: callers must explicitly pass dry_run=false to move files
+    dry_run = bool(data.get("dry_run", True))
+    opponent_kit: Optional[str] = data.get("opponent_kit")
 
     try:
         drive = DriveClient()
@@ -660,6 +715,7 @@ def organize_moments() -> Response:
                 FOLDER_KICKS,
                 FOLDER_GENERAL,
                 FOLDER_OPPOSING_TEAM,
+                FOLDER_NEEDS_REVIEW,
             ):
                 if not dry_run:
                     primary_subfolder_ids[f_name] = drive.get_or_create_subfolder(folder_id, f_name)
@@ -681,70 +737,76 @@ def organize_moments() -> Response:
                 else:
                     opposing_subfolder_ids[f_name] = f"mock_opp_{f_name}"
 
-            # 3. List all video files inside this match folder (recursive)
+            # 3. List all video files inside this match folder (recursive).
+            #    16:9 first: the wider frame gives Gemini the most context, and the
+            #    9:16 copy of the same event reuses that verdict.
             match_videos = drive.list_all_video_files_recursive(folder_id)
+            match_videos.sort(key=lambda f: 0 if "16x9" in f["name"] else 1)
 
-            for f in match_videos:
-                fid = f["id"]
-                fname = f["name"]
+            _, _, opponent_slug = parse_match_identifiers(folder_name)
+            opponent_name = opponent_slug.replace("-", " ").title() if opponent_slug else "Opponent"
+            if manifest_data:
+                opponent_name = manifest_data.get("opponent_name") or opponent_name
 
-                # A. Highlights
-                if "highlights" in fname.lower() and fname.endswith(".mp4"):
-                    target_folder_id = primary_subfolder_ids[FOLDER_HIGHLIGHTS]
-                    target_folder_name = f"{folder_name}/{FOLDER_HIGHLIGHTS}"
+            verdicts: dict[str, dict[str, Any]] = {}
 
-                    if not dry_run:
-                        drive.move_file(fid, target_folder_id)
-                    changes.append({
-                        "file_id": fid,
-                        "file_name": fname,
-                        "category": FOLDER_HIGHLIGHTS,
-                        "sentiment": "fog_positive",
-                        "team": "sf_fog",
-                        "team_display": "SF Fog RFC",
-                        "target_folder": target_folder_name,
-                    })
+            with tempfile.TemporaryDirectory(prefix="fog_organize_") as tmpdir:
+                for f in match_videos:
+                    fid = f["id"]
+                    fname = f["name"]
+                    if not fname.endswith(".mp4"):
+                        continue
 
-                # B. Social Clips
-                elif fname.endswith(".mp4"):
-                    ev_match = re.search(r'(veo_evt_\d+)', fname)
-                    if ev_match:
-                        ev_id = ev_match.group(1)
-                    else:
-                        num_match = re.search(r'-(\d{3,4})\.mp4$', fname)
-                        if num_match:
-                            ev_id = f"veo_evt_{num_match.group(1)}"
-                        else:
-                            ev_id = None
+                    # A. Highlight reels are built from verified Fog clips only
+                    if "highlights" in fname.lower():
+                        if not dry_run:
+                            drive.move_file(fid, primary_subfolder_ids[FOLDER_HIGHLIGHTS])
+                        changes.append({
+                            "file_id": fid,
+                            "file_name": fname,
+                            "category": FOLDER_HIGHLIGHTS,
+                            "target_folder": f"{folder_name}/{FOLDER_HIGHLIGHTS}",
+                        })
+                        continue
+
+                    # B. Social clips: classify from the clip's own footage
+                    ev_id = _event_id_from_clip_name(fname)
                     ev_data = events_by_id.get(ev_id, {}) if ev_id else {}
-
-                    event_type = ev_data.get("event_type", "")
+                    event_type = ev_data.get("event_type", "") or _event_type_from_clip_name(fname)
                     description = ev_data.get("description", "")
-                    start_time = ev_data.get("start_time", 0.0)
-                    end_time = ev_data.get("end_time", 0.0)
 
-                    if not event_type:
-                        for et_candidate in ("try", "scrum", "lineout", "conversion", "kick"):
-                            if et_candidate in fname.lower():
-                                event_type = et_candidate
-                                break
+                    cache_key = ev_id or fname
+                    sentiment_info = verdicts.get(cache_key)
+                    if sentiment_info is None:
+                        local_clip = os.path.join(tmpdir, f"{fid}.mp4")
+                        try:
+                            drive.download_file_to_path(fid, local_clip)
+                            clip_duration = _probe_duration(local_clip)
+                            sentiment_info = classify_event_sentiment(
+                                event_id=cache_key,
+                                event_type=event_type,
+                                description=description,
+                                start_time=0.0,
+                                end_time=clip_duration,
+                                video_path=local_clip,
+                                opponent_name=opponent_name,
+                                opponent_kit=opponent_kit,
+                            )
+                        finally:
+                            if os.path.exists(local_clip):
+                                os.remove(local_clip)
+                        verdicts[cache_key] = sentiment_info
 
-                    sentiment_info = classify_event_sentiment(
-                        event_id=ev_id or fname,
-                        event_type=event_type,
-                        description=description,
-                        start_time=start_time,
-                        end_time=end_time,
+                    primary_folder, nested = get_target_subfolder_path(
+                        event_type, sentiment=sentiment_info["sentiment"], filename=fname
                     )
-
-                    moment_folder = get_moment_folder_name(event_type, filename=fname)
-
-                    if sentiment_info["sentiment"] == "fog_negative":
-                        target_folder_id = opposing_subfolder_ids.get(moment_folder, opposing_parent_id)
-                        target_folder_name = f"{folder_name}/{FOLDER_OPPOSING_TEAM}/{moment_folder}"
+                    if primary_folder == FOLDER_OPPOSING_TEAM:
+                        target_folder_id = opposing_subfolder_ids.get(nested, opposing_parent_id)
+                    elif primary_folder == FOLDER_NEEDS_REVIEW:
+                        target_folder_id = primary_subfolder_ids[FOLDER_NEEDS_REVIEW]
                     else:
-                        target_folder_id = primary_subfolder_ids.get(moment_folder, primary_subfolder_ids[FOLDER_GENERAL])
-                        target_folder_name = f"{folder_name}/{moment_folder}"
+                        target_folder_id = primary_subfolder_ids.get(primary_folder, primary_subfolder_ids[FOLDER_GENERAL])
+                    target_folder_name = "/".join(p for p in (folder_name, primary_folder, nested) if p)
 
                     if not dry_run:
                         drive.move_file(fid, target_folder_id)
@@ -753,29 +815,29 @@ def organize_moments() -> Response:
                         "file_id": fid,
                         "file_name": fname,
                         "event_id": ev_id,
-                        "category": moment_folder,
+                        "category": nested or primary_folder,
                         "sentiment": sentiment_info["sentiment"],
                         "team": sentiment_info["team"],
                         "team_display": sentiment_info["team_display"],
                         "confidence": sentiment_info["confidence"],
+                        "rationale": sentiment_info.get("rationale", ""),
+                        "classified_by": sentiment_info.get("classified_by", "unverified"),
                         "target_folder": target_folder_name,
                     })
 
-            # 4. Update manifest events with sentiment and team classification
+            # 4. Write the footage-based verdicts back onto manifest events (no re-guessing)
             if manifest_data and "events" in manifest_data and not dry_run:
                 manifest_updated = False
                 for ev in manifest_data["events"]:
-                    eid = ev.get("event_id", "")
-                    s_info = classify_event_sentiment(
-                        event_id=eid,
-                        event_type=ev.get("event_type", ""),
-                        description=ev.get("description", ""),
-                        start_time=ev.get("start_time", 0.0),
-                        end_time=ev.get("end_time", 0.0),
-                    )
-                    ev["sentiment"] = s_info["sentiment"]
-                    ev["team"] = s_info["team"]
-                    ev["team_display"] = s_info["team_display"]
+                    v = verdicts.get(ev.get("event_id", ""))
+                    if not v:
+                        continue
+                    ev["sentiment"] = v["sentiment"]
+                    ev["sentiment_confidence"] = v["confidence"]
+                    ev["sentiment_rationale"] = v.get("rationale", "")
+                    ev["team"] = v["team"]
+                    ev["team_display"] = v["team_display"]
+                    ev["classified_by"] = v.get("classified_by")
                     manifest_updated = True
 
                 if manifest_updated:
@@ -785,10 +847,15 @@ def organize_moments() -> Response:
                     except Exception as mf_err:
                         logger.warning("Could not rewrite manifest: %s", mf_err)
 
+        summary: dict[str, int] = {}
+        for c in changes:
+            key = c.get("sentiment", "highlight_reel")
+            summary[key] = summary.get(key, 0) + 1
         return jsonify({
             "status": "complete",
             "dry_run": dry_run,
             "organized_clips_count": len(changes),
+            "summary": summary,
             "changes": changes,
         })
     except Exception as exc:
@@ -1253,9 +1320,15 @@ def batch_extract() -> Response:
 @app.route("/highlights/build", methods=["POST"])
 def build_highlights() -> Response:
     data = request.get_json(silent=True) or {}
-    match_id: Optional[str] = data.get("match_id", "20260822-san-francisco-fog-rfc-a-side-vs-sydney-convicts-1-v4fb17b0")
-    formats: list[str] = data.get("formats", ["16:9", "9:16"])
-    zoom: float = float(data.get("zoom", 1.25))
+    match_id: Optional[str] = data.get("match_id")
+    if not match_id:
+        return jsonify({"error": "match_id is required"}), 400
+    formats: list[str] = [f for f in data.get("formats", ["16:9", "9:16"]) if f in ("16:9", "9:16")]
+    if not formats:
+        return jsonify({"error": "formats must include '16:9' and/or '9:16'"}), 400
+    zoom: float = min(max(float(data.get("zoom", 1.25)), 1.0), 2.0)
+    max_moments: int = min(max(int(data.get("max_moments", 8)), 1), 20)
+    event_tag: str = str(data.get("event_tag", "MATCH HIGHLIGHTS"))[:60]
     stream: bool = bool(data.get("stream", True))
 
     job_id = uuid.uuid4().hex[:8]
@@ -1288,7 +1361,7 @@ def build_highlights() -> Response:
 
         def _stream_worker():
             try:
-                res = run_highlights_job(job_id=job_id, match_id=match_id, formats=formats, zoom=zoom, progress_callback=on_progress)
+                res = run_highlights_job(job_id=job_id, match_id=match_id, formats=formats, zoom=zoom, max_moments=max_moments, event_tag=event_tag, progress_callback=on_progress)
                 job = _get_job(job_id) or initial_job_data
                 job["stage"] = "complete"
                 job["progress_pct"] = 100
@@ -1331,7 +1404,7 @@ def build_highlights() -> Response:
                 job["updated_at"] = time.time()
                 _save_job(job_id, job)
 
-            res = run_highlights_job(job_id=job_id, match_id=match_id, formats=formats, zoom=zoom, progress_callback=on_progress)
+            res = run_highlights_job(job_id=job_id, match_id=match_id, formats=formats, zoom=zoom, max_moments=max_moments, event_tag=event_tag, progress_callback=on_progress)
             job = _get_job(job_id) or initial_job_data
             job["stage"] = "complete"
             job["progress_pct"] = 100
