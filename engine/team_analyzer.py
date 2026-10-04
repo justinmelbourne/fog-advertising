@@ -224,6 +224,8 @@ def classify_moment_with_gemini(
 TEAMS & UNIFORMS:
 1. SF Fog RFC: {fog_kit}.
 2. {opponent_name}: {opponent_kit}.
+Exactly two teams are on the pitch and exactly one of them is SF Fog RFC. You only need to decide
+which of the two kits the decisive player is wearing; if it is not the Fog kit, it is {opponent_name}.
 
 YOUR TASK:
 1. Find the decisive action: who grounds the ball for a try, who kicks at goal, which pack wins the scrum, which jumper wins the lineout.

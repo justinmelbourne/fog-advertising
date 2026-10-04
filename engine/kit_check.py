@@ -57,7 +57,7 @@ def detect_teams(frame_path: str, fog_kit: str = DEFAULT_FOG_KIT, opponent_name:
     prompt = f"""This is a frame from a rugby match filmed by a Veo camera.
 
 SF Fog RFC kit: {fog_kit}.
-The other team is {opponent_name}.
+The other team is {opponent_name}. Exactly one of the two teams on the pitch is SF Fog RFC.
 
 1. Find every person on the pitch. For each, return a tight box_2d as [ymin, xmin, ymax, xmax] normalised 0-1000,
    and team: "fog", "opponent", "referee" or "unknown".
