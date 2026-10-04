@@ -23,13 +23,17 @@ Environment Variables (set via Secret Manager in Cloud Run):
   DRIVE_INGEST_FOLDER_ID   - Google Drive folder ID for game day ingest
   DRIVE_OUTPUT_FOLDER_ID   - Google Drive folder ID for social-ready clips
   GCS_BUCKET               - Cloud Storage bucket for proxy previews
-  GEMINI_API_KEY           - Gemini API key
+  GEMINI_BACKEND           - "vertex" (service account, club billing) or "api_key"
+  GEMINI_MODEL             - Gemini model id (e.g. gemini-3.8-flash)
+  GEMINI_API_KEY           - Only for GEMINI_BACKEND=api_key (local dev)
+  FOG_API_KEY              - Optional: require X-Fog-Api-Key on POST routes
   VEO_API_TOKEN            - Optional Veo API bearer token (for private recordings)
 """
 
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 import uuid
@@ -103,8 +107,10 @@ from engine.naming import (
     FOLDER_KICKS,
     FOLDER_GENERAL,
     FOLDER_OPPOSING_TEAM,
+    FOLDER_NEEDS_REVIEW,
 )
-from engine.team_analyzer import classify_event_sentiment
+from engine.team_analyzer import classify_event_sentiment, DEFAULT_FOG_KIT
+from engine.kit_check import extract_frame, detect_teams, draw_kit_check, confirmed_kits, apply_confirmation
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -124,6 +130,28 @@ def add_cors_headers(response: Response) -> Response:
         "Content-Type, Authorization, X-Fog-Api-Key"
     )
     return response
+
+
+# GETs that expose Drive contents need the key too (the /studio page itself is public, no data)
+_PROTECTED_GET_PREFIXES = ("/drive/debug", "/api/", "/kit-check/image")
+
+
+@app.before_request
+def require_api_key() -> Optional[Response]:
+    """
+    When FOG_API_KEY is set (Secret Manager), every mutating request and the Drive
+    debug listing must carry a matching X-Fog-Api-Key header. Unset = open (legacy).
+    """
+    import hmac
+    expected = os.environ.get("FOG_API_KEY", "")
+    if not expected or request.method == "OPTIONS":
+        return None
+    if request.method == "GET" and not request.path.startswith(_PROTECTED_GET_PREFIXES):
+        return None
+    provided = request.headers.get("X-Fog-Api-Key", "")
+    if not hmac.compare_digest(provided.encode(), expected.encode()):
+        return jsonify({"error": "unauthorized"}), 401
+    return None
 
 
 @app.before_request
@@ -610,187 +638,498 @@ def migrate_naming() -> Response:
 # stay in the primary moment structure.
 # ---------------------------------------------------------------------------
 
-@app.route("/drive/organize-moments", methods=["POST"])
-def organize_moments() -> Response:
+def _load_match_manifest(drive: DriveClient, folder_id: str, folder_name: str) -> Optional[dict[str, Any]]:
+    manifest_data = drive.read_manifest(folder_name)
+    if not manifest_data:
+        for f in drive.list_all_files(folder_id):
+            if f["name"].endswith(".json"):
+                manifest_data = drive.read_manifest(f["name"])
+                if manifest_data:
+                    break
+    return manifest_data
+
+
+def _find_match_folder(drive: DriveClient, match_id: str) -> Optional[dict[str, Any]]:
+    for f in drive.list_all_files(drive._output_folder_id):
+        if f.get("mimeType") == "application/vnd.google-apps.folder" and match_id in f["name"]:
+            return f
+    return None
+
+
+def _event_id_from_clip_name(fname: str) -> Optional[str]:
+    """Map 'veo_evt_034' or '..._try-034.mp4' clip names back to a manifest event id."""
     import re
+    m = re.search(r"(veo_evt_\d+)", fname)
+    if m:
+        return m.group(1)
+    m = re.search(r"-(\d{3,4})\.mp4$", fname)
+    return f"veo_evt_{m.group(1)}" if m else None
+
+
+def _event_type_from_clip_name(fname: str) -> str:
+    lower = fname.lower()
+    for candidate in ("try", "scrum", "lineout", "conversion", "kick"):
+        if f"_{candidate}" in lower or f"-{candidate}" in lower:
+            return candidate
+    return ""
+
+
+def _probe_duration(path: str) -> float:
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path],
+            capture_output=True, text=True, timeout=30,
+        ).stdout.strip()
+        return float(out) if out else 20.0
+    except Exception:
+        return 20.0
+
+
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+@app.route("/studio", methods=["GET"])
+def studio() -> Response:
+    """Fog Studio control page. Static shell only; every data call needs the club key."""
+    return Response((STATIC_DIR / "studio.html").read_text(encoding="utf-8"), mimetype="text/html")
+
+
+@app.route("/studio/config", methods=["GET"])
+def studio_config() -> Response:
+    return jsonify({"auth_required": bool(os.environ.get("FOG_API_KEY"))})
+
+
+@app.route("/api/matches", methods=["GET"])
+def api_matches() -> Response:
+    try:
+        drive = DriveClient()
+        folders = [
+            {"id": f["id"], "name": f["name"]}
+            for f in drive.list_all_files(drive._output_folder_id)
+            if f.get("mimeType") == "application/vnd.google-apps.folder"
+        ]
+        folders.sort(key=lambda f: f["name"], reverse=True)
+        return jsonify({"matches": folders})
+    except Exception as exc:
+        logger.exception("Listing matches failed: %s", exc)
+        return jsonify({"error": f"Listing matches failed: {type(exc).__name__}"}), 500
+
+
+@app.route("/api/match-status", methods=["GET"])
+def api_match_status() -> Response:
+    match_id = request.args.get("match_id", "")
+    if not match_id:
+        return jsonify({"error": "match_id is required"}), 400
+    try:
+        drive = DriveClient()
+        folder = _find_match_folder(drive, match_id)
+        if not folder:
+            return jsonify({"error": f"No match folder found for {match_id}"}), 404
+        manifest_data = _load_match_manifest(drive, folder["id"], folder["name"]) or {}
+        counts: dict[str, int] = {}
+        for ev in manifest_data.get("events", []):
+            key = ev.get("sentiment") or "neutral"
+            counts[key] = counts.get(key, 0) + 1
+        kc = manifest_data.get("kit_check") or {}
+        return jsonify({
+            "match_id": folder["name"],
+            "has_manifest": bool(manifest_data),
+            "opponent_name": manifest_data.get("opponent_name"),
+            "events": len(manifest_data.get("events", [])),
+            "sentiment_counts": counts,
+            "kit_check": {k: kc.get(k) for k in ("fog_kit", "opponent_kit", "confirmed", "source_clip", "image_file_id")} if kc else None,
+        })
+    except Exception as exc:
+        logger.exception("Match status failed for %s: %s", match_id, exc)
+        return jsonify({"error": f"Match status failed: {type(exc).__name__}"}), 500
+
+
+@app.route("/kit-check/image", methods=["GET"])
+def kit_check_image() -> Response:
+    """Stream the annotated kit-check PNG so the page can show it without Drive sharing."""
+    match_id = request.args.get("match_id", "")
+    try:
+        drive = DriveClient()
+        folder = _find_match_folder(drive, match_id) if match_id else None
+        manifest_data = _load_match_manifest(drive, folder["id"], folder["name"]) if folder else None
+        file_id = ((manifest_data or {}).get("kit_check") or {}).get("image_file_id")
+        if not file_id:
+            return jsonify({"error": "No kit-check image for this match yet"}), 404
+        with tempfile.TemporaryDirectory(prefix="fog_kitimg_") as tmpdir:
+            local = os.path.join(tmpdir, "kit.png")
+            drive.download_file_to_path(file_id, local)
+            with open(local, "rb") as fh:
+                png = fh.read()
+        resp = Response(png, mimetype="image/png")
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+    except Exception as exc:
+        logger.exception("Kit image failed for %s: %s", match_id, exc)
+        return jsonify({"error": f"Kit image failed: {type(exc).__name__}"}), 500
+
+
+@app.route("/kit-check", methods=["POST"])
+def kit_check() -> Response:
+    """
+    Grab one wide frame for a match, box every player as Fog/opponent with Gemini,
+    save the annotated PNG to the match folder, and store the pending kit descriptions.
+    Body: {match_id, clip_name?: str, timestamp?: float}
+    """
     data = request.get_json(silent=True) or {}
-    match_filter = data.get("match_id")
-    dry_run = data.get("dry_run", False)
+    match_id = data.get("match_id")
+    if not match_id:
+        return jsonify({"error": "match_id is required"}), 400
 
     try:
         drive = DriveClient()
-        changes = []
+        folder = _find_match_folder(drive, match_id)
+        if not folder:
+            return jsonify({"error": f"No match folder found for {match_id}"}), 404
+        manifest_data = _load_match_manifest(drive, folder["id"], folder["name"])
+        if not manifest_data:
+            return jsonify({"error": f"No manifest found for {match_id}"}), 404
 
-        out_files = drive.list_all_files(drive._output_folder_id)
-        match_folders = [
-            f for f in out_files
-            if f.get("mimeType") == "application/vnd.google-apps.folder"
-        ]
+        clips = [f for f in drive.list_all_video_files_recursive(folder["id"]) if f["name"].endswith(".mp4")]
+        wanted = data.get("clip_name")
+        if wanted:
+            clips = [c for c in clips if c["name"] == wanted]
+        else:
+            # Set pieces put both teams in one frame; prefer the wide 16:9 cut
+            def rank(c: dict[str, Any]) -> tuple[int, int]:
+                n = c["name"].lower()
+                kind = 0 if "scrum" in n else 1 if "lineout" in n else 2
+                return (kind, 0 if "16x9" in n else 1)
+            clips.sort(key=rank)
+        if not clips:
+            return jsonify({"error": "No clips found in the match folder"}), 404
+        clip = clips[0]
 
-        if not match_folders:
-            return jsonify({"status": "no_match_folders_found", "changes": []})
+        _, _, opponent_slug = parse_match_identifiers(folder["name"])
+        opponent_name = manifest_data.get("opponent_name") or (
+            opponent_slug.replace("-", " ").title() if opponent_slug else "Opponent")
 
-        for mf in match_folders:
-            folder_id = mf["id"]
-            folder_name = mf["name"]
+        with tempfile.TemporaryDirectory(prefix="fog_kitcheck_") as tmpdir:
+            local_clip = os.path.join(tmpdir, "clip.mp4")
+            drive.download_file_to_path(clip["id"], local_clip)
+            ts = data.get("timestamp")
+            ts = float(ts) if ts is not None else _probe_duration(local_clip) * 0.4
+            frame = extract_frame(local_clip, ts, os.path.join(tmpdir, "frame.jpg"))
+            if not frame:
+                return jsonify({"error": "Could not extract a frame from the clip"}), 500
 
-            if match_filter and match_filter not in folder_name:
-                continue
+            detection = detect_teams(frame, fog_kit=DEFAULT_FOG_KIT, opponent_name=opponent_name)
+            annotated = draw_kit_check(frame, detection, os.path.join(tmpdir, "kit_check.png"))
 
-            manifest_data = drive.read_manifest(folder_name)
-            if not manifest_data:
-                mfiles = drive.list_all_files(folder_id)
-                for f in mfiles:
-                    if f["name"].endswith(".json"):
-                        manifest_data = drive.read_manifest(f["name"])
-                        if manifest_data:
-                            break
+            m_date, uid, _ = parse_match_identifiers(folder["name"])
+            png_name = f"{m_date}_{uid}_kit-check.png"
+            image_id = drive.upsert_file_to_folder(annotated, png_name, folder["id"], mime="image/png")
 
-            events_by_id = {}
-            if manifest_data and "events" in manifest_data:
-                events_by_id = {e["event_id"]: e for e in manifest_data["events"]}
+        manifest_data["opponent_name"] = opponent_name
+        manifest_data["kit_check"] = {
+            "fog_kit": detection["fog_kit_observed"],
+            "opponent_kit": detection["opponent_kit_observed"],
+            "confirmed": False,
+            "source_clip": clip["name"],
+            "timestamp": round(ts, 2),
+            "image_file_id": image_id,
+            "players_fog": sum(1 for p in detection["players"] if p["team"] == "fog"),
+            "players_opponent": sum(1 for p in detection["players"] if p["team"] == "opponent"),
+        }
+        drive.write_manifest(Manifest.model_validate(manifest_data))
 
-            # 1. Create primary moment subfolders inside match folder
-            primary_subfolder_ids = {}
-            for f_name in (
-                FOLDER_HIGHLIGHTS,
-                FOLDER_TRIES,
-                FOLDER_SCRUMS,
-                FOLDER_LINEOUTS,
-                FOLDER_KICKS,
-                FOLDER_GENERAL,
-                FOLDER_OPPOSING_TEAM,
-            ):
-                if not dry_run:
-                    primary_subfolder_ids[f_name] = drive.get_or_create_subfolder(folder_id, f_name)
-                else:
-                    primary_subfolder_ids[f_name] = f"mock_{f_name}"
+        return jsonify({
+            "status": "awaiting_confirmation",
+            "match_id": match_id,
+            "image_url": f"https://drive.google.com/file/d/{image_id}/view",
+            "fog_kit_observed": detection["fog_kit_observed"],
+            "opponent_kit_observed": detection["opponent_kit_observed"],
+            "players": {"fog": manifest_data["kit_check"]["players_fog"],
+                        "opponent": manifest_data["kit_check"]["players_opponent"]},
+            "next": "POST /kit-check/confirm with {match_id, swap: false} if cyan = Fog, or swap: true if it's backwards",
+        })
+    except Exception as exc:
+        logger.exception("Kit check failed for %s: %s", match_id, exc)
+        return jsonify({"error": f"Kit check failed: {type(exc).__name__}"}), 500
 
-            # 2. Create nested subfolders inside Opposing Team Videos/
-            opposing_parent_id = primary_subfolder_ids[FOLDER_OPPOSING_TEAM]
-            opposing_subfolder_ids = {}
-            for f_name in (
-                FOLDER_TRIES,
-                FOLDER_SCRUMS,
-                FOLDER_LINEOUTS,
-                FOLDER_KICKS,
-                FOLDER_GENERAL,
-            ):
-                if not dry_run:
-                    opposing_subfolder_ids[f_name] = drive.get_or_create_subfolder(opposing_parent_id, f_name)
-                else:
-                    opposing_subfolder_ids[f_name] = f"mock_opp_{f_name}"
 
-            # 3. List all video files inside this match folder (recursive)
-            match_videos = drive.list_all_video_files_recursive(folder_id)
+@app.route("/kit-check/confirm", methods=["POST"])
+def kit_check_confirm() -> Response:
+    """Body: {match_id, swap?: bool, fog_kit?: str, opponent_kit?: str}"""
+    data = request.get_json(silent=True) or {}
+    match_id = data.get("match_id")
+    if not match_id:
+        return jsonify({"error": "match_id is required"}), 400
+    try:
+        drive = DriveClient()
+        folder = _find_match_folder(drive, match_id)
+        if not folder:
+            return jsonify({"error": f"No match folder found for {match_id}"}), 404
+        manifest_data = _load_match_manifest(drive, folder["id"], folder["name"])
+        if not manifest_data or not manifest_data.get("kit_check"):
+            return jsonify({"error": "Run POST /kit-check for this match first"}), 409
 
+        manifest_data["kit_check"] = apply_confirmation(
+            manifest_data["kit_check"],
+            swap=bool(data.get("swap", False)),
+            fog_kit=data.get("fog_kit"),
+            opponent_kit=data.get("opponent_kit"),
+        )
+        drive.write_manifest(Manifest.model_validate(manifest_data))
+        kc = manifest_data["kit_check"]
+        return jsonify({"status": "confirmed", "match_id": match_id,
+                        "fog_kit": kc["fog_kit"], "opponent_kit": kc["opponent_kit"]})
+    except Exception as exc:
+        logger.exception("Kit check confirm failed for %s: %s", match_id, exc)
+        return jsonify({"error": f"Kit check confirm failed: {type(exc).__name__}"}), 500
+
+
+def _run_organize(match_filter: Optional[str], dry_run: bool, opponent_kit: Optional[str],
+                  progress: Optional[Any] = None) -> dict[str, Any]:
+    """Sort a match folder's clips by footage-verified verdict. progress(done, total, file, match)."""
+    drive = DriveClient()
+    changes = []
+    blocked: list[str] = []
+
+    out_files = drive.list_all_files(drive._output_folder_id)
+    match_folders = [
+        f for f in out_files
+        if f.get("mimeType") == "application/vnd.google-apps.folder"
+    ]
+
+    if not match_folders:
+        return {"status": "no_match_folders_found", "changes": []}
+
+    for mf in match_folders:
+        folder_id = mf["id"]
+        folder_name = mf["name"]
+
+        if match_filter and match_filter not in folder_name:
+            continue
+
+        manifest_data = _load_match_manifest(drive, folder_id, folder_name)
+
+        # Real moves only after a human confirmed this match's kits (POST /kit-check/confirm)
+        kits = confirmed_kits(manifest_data)
+        if not dry_run and not kits:
+            blocked.append(folder_name)
+            continue
+        fog_kit = kits["fog_kit"] if kits else DEFAULT_FOG_KIT
+        match_opponent_kit = kits["opponent_kit"] if kits else opponent_kit
+
+        events_by_id = {}
+        if manifest_data and "events" in manifest_data:
+            events_by_id = {e["event_id"]: e for e in manifest_data["events"]}
+
+        # 1. Create primary moment subfolders inside match folder
+        primary_subfolder_ids = {}
+        for f_name in (
+            FOLDER_HIGHLIGHTS,
+            FOLDER_TRIES,
+            FOLDER_SCRUMS,
+            FOLDER_LINEOUTS,
+            FOLDER_KICKS,
+            FOLDER_GENERAL,
+            FOLDER_OPPOSING_TEAM,
+            FOLDER_NEEDS_REVIEW,
+        ):
+            if not dry_run:
+                primary_subfolder_ids[f_name] = drive.get_or_create_subfolder(folder_id, f_name)
+            else:
+                primary_subfolder_ids[f_name] = f"mock_{f_name}"
+
+        # 2. Create nested subfolders inside Opposing Team Videos/
+        opposing_parent_id = primary_subfolder_ids[FOLDER_OPPOSING_TEAM]
+        opposing_subfolder_ids = {}
+        for f_name in (
+            FOLDER_TRIES,
+            FOLDER_SCRUMS,
+            FOLDER_LINEOUTS,
+            FOLDER_KICKS,
+            FOLDER_GENERAL,
+        ):
+            if not dry_run:
+                opposing_subfolder_ids[f_name] = drive.get_or_create_subfolder(opposing_parent_id, f_name)
+            else:
+                opposing_subfolder_ids[f_name] = f"mock_opp_{f_name}"
+
+        # 3. List all video files inside this match folder (recursive).
+        #    16:9 first: the wider frame gives Gemini the most context, and the
+        #    9:16 copy of the same event reuses that verdict.
+        match_videos = drive.list_all_video_files_recursive(folder_id)
+        match_videos.sort(key=lambda f: 0 if "16x9" in f["name"] else 1)
+
+        _, _, opponent_slug = parse_match_identifiers(folder_name)
+        opponent_name = opponent_slug.replace("-", " ").title() if opponent_slug else "Opponent"
+        if manifest_data:
+            opponent_name = manifest_data.get("opponent_name") or opponent_name
+
+        verdicts: dict[str, dict[str, Any]] = {}
+
+        with tempfile.TemporaryDirectory(prefix="fog_organize_") as tmpdir:
             for f in match_videos:
                 fid = f["id"]
                 fname = f["name"]
+                if not fname.endswith(".mp4"):
+                    continue
 
-                # A. Highlights
-                if "highlights" in fname.lower() and fname.endswith(".mp4"):
-                    target_folder_id = primary_subfolder_ids[FOLDER_HIGHLIGHTS]
-                    target_folder_name = f"{folder_name}/{FOLDER_HIGHLIGHTS}"
-
+                # A. Highlight reels are built from verified Fog clips only
+                if "highlights" in fname.lower():
                     if not dry_run:
-                        drive.move_file(fid, target_folder_id)
+                        drive.move_file(fid, primary_subfolder_ids[FOLDER_HIGHLIGHTS])
                     changes.append({
                         "file_id": fid,
                         "file_name": fname,
                         "category": FOLDER_HIGHLIGHTS,
-                        "sentiment": "fog_positive",
-                        "team": "sf_fog",
-                        "team_display": "SF Fog RFC",
-                        "target_folder": target_folder_name,
+                        "target_folder": f"{folder_name}/{FOLDER_HIGHLIGHTS}",
                     })
+                    continue
 
-                # B. Social Clips
-                elif fname.endswith(".mp4"):
-                    ev_match = re.search(r'(veo_evt_\d+)', fname)
-                    if ev_match:
-                        ev_id = ev_match.group(1)
-                    else:
-                        num_match = re.search(r'-(\d{3,4})\.mp4$', fname)
-                        if num_match:
-                            ev_id = f"veo_evt_{num_match.group(1)}"
-                        else:
-                            ev_id = None
-                    ev_data = events_by_id.get(ev_id, {}) if ev_id else {}
+                # B. Social clips: classify from the clip's own footage
+                ev_id = _event_id_from_clip_name(fname)
+                ev_data = events_by_id.get(ev_id, {}) if ev_id else {}
+                event_type = ev_data.get("event_type", "") or _event_type_from_clip_name(fname)
+                description = ev_data.get("description", "")
 
-                    event_type = ev_data.get("event_type", "")
-                    description = ev_data.get("description", "")
-                    start_time = ev_data.get("start_time", 0.0)
-                    end_time = ev_data.get("end_time", 0.0)
-
-                    if not event_type:
-                        for et_candidate in ("try", "scrum", "lineout", "conversion", "kick"):
-                            if et_candidate in fname.lower():
-                                event_type = et_candidate
-                                break
-
-                    sentiment_info = classify_event_sentiment(
-                        event_id=ev_id or fname,
-                        event_type=event_type,
-                        description=description,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-
-                    moment_folder = get_moment_folder_name(event_type, filename=fname)
-
-                    if sentiment_info["sentiment"] == "fog_negative":
-                        target_folder_id = opposing_subfolder_ids.get(moment_folder, opposing_parent_id)
-                        target_folder_name = f"{folder_name}/{FOLDER_OPPOSING_TEAM}/{moment_folder}"
-                    else:
-                        target_folder_id = primary_subfolder_ids.get(moment_folder, primary_subfolder_ids[FOLDER_GENERAL])
-                        target_folder_name = f"{folder_name}/{moment_folder}"
-
-                    if not dry_run:
-                        drive.move_file(fid, target_folder_id)
-
-                    changes.append({
-                        "file_id": fid,
-                        "file_name": fname,
-                        "event_id": ev_id,
-                        "category": moment_folder,
-                        "sentiment": sentiment_info["sentiment"],
-                        "team": sentiment_info["team"],
-                        "team_display": sentiment_info["team_display"],
-                        "confidence": sentiment_info["confidence"],
-                        "target_folder": target_folder_name,
-                    })
-
-            # 4. Update manifest events with sentiment and team classification
-            if manifest_data and "events" in manifest_data and not dry_run:
-                manifest_updated = False
-                for ev in manifest_data["events"]:
-                    eid = ev.get("event_id", "")
-                    s_info = classify_event_sentiment(
-                        event_id=eid,
-                        event_type=ev.get("event_type", ""),
-                        description=ev.get("description", ""),
-                        start_time=ev.get("start_time", 0.0),
-                        end_time=ev.get("end_time", 0.0),
-                    )
-                    ev["sentiment"] = s_info["sentiment"]
-                    ev["team"] = s_info["team"]
-                    ev["team_display"] = s_info["team_display"]
-                    manifest_updated = True
-
-                if manifest_updated:
+                cache_key = ev_id or fname
+                sentiment_info = verdicts.get(cache_key)
+                if sentiment_info is None:
+                    local_clip = os.path.join(tmpdir, f"{fid}.mp4")
                     try:
-                        updated_manifest_obj = Manifest.model_validate(manifest_data)
-                        drive.write_manifest(updated_manifest_obj)
-                    except Exception as mf_err:
-                        logger.warning("Could not rewrite manifest: %s", mf_err)
+                        drive.download_file_to_path(fid, local_clip)
+                        clip_duration = _probe_duration(local_clip)
+                        sentiment_info = classify_event_sentiment(
+                            event_id=cache_key,
+                            event_type=event_type,
+                            description=description,
+                            start_time=0.0,
+                            end_time=clip_duration,
+                            video_path=local_clip,
+                            opponent_name=opponent_name,
+                            opponent_kit=match_opponent_kit,
+                            fog_kit=fog_kit,
+                        )
+                    finally:
+                        if os.path.exists(local_clip):
+                            os.remove(local_clip)
+                    verdicts[cache_key] = sentiment_info
+                    if progress:
+                        progress(match_videos.index(f) + 1, len(match_videos), fname, folder_name)
+                    logger.info(
+                        "Classified %s -> %s (%.2f) via %s [%d/%d]",
+                        fname, sentiment_info["sentiment"], sentiment_info.get("confidence", 0.0),
+                        sentiment_info.get("classified_by", "unverified"),
+                        match_videos.index(f) + 1, len(match_videos),
+                    )
 
-        return jsonify({
-            "status": "complete",
-            "dry_run": dry_run,
-            "organized_clips_count": len(changes),
-            "changes": changes,
-        })
+                primary_folder, nested = get_target_subfolder_path(
+                    event_type, sentiment=sentiment_info["sentiment"], filename=fname
+                )
+                if primary_folder == FOLDER_OPPOSING_TEAM:
+                    target_folder_id = opposing_subfolder_ids.get(nested, opposing_parent_id)
+                elif primary_folder == FOLDER_NEEDS_REVIEW:
+                    target_folder_id = primary_subfolder_ids[FOLDER_NEEDS_REVIEW]
+                else:
+                    target_folder_id = primary_subfolder_ids.get(primary_folder, primary_subfolder_ids[FOLDER_GENERAL])
+                target_folder_name = "/".join(p for p in (folder_name, primary_folder, nested) if p)
+
+                if not dry_run:
+                    drive.move_file(fid, target_folder_id)
+
+                changes.append({
+                    "file_id": fid,
+                    "file_name": fname,
+                    "event_id": ev_id,
+                    "category": nested or primary_folder,
+                    "sentiment": sentiment_info["sentiment"],
+                    "team": sentiment_info["team"],
+                    "team_display": sentiment_info["team_display"],
+                    "confidence": sentiment_info["confidence"],
+                    "rationale": sentiment_info.get("rationale", ""),
+                    "classified_by": sentiment_info.get("classified_by", "unverified"),
+                    "target_folder": target_folder_name,
+                })
+
+        # 4. Write the footage-based verdicts back onto manifest events (no re-guessing)
+        if manifest_data and "events" in manifest_data and not dry_run:
+            manifest_updated = False
+            for ev in manifest_data["events"]:
+                v = verdicts.get(ev.get("event_id", ""))
+                if not v:
+                    continue
+                ev["sentiment"] = v["sentiment"]
+                ev["sentiment_confidence"] = v["confidence"]
+                ev["sentiment_rationale"] = v.get("rationale", "")
+                ev["team"] = v["team"]
+                ev["team_display"] = v["team_display"]
+                ev["classified_by"] = v.get("classified_by")
+                manifest_updated = True
+
+            if manifest_updated:
+                try:
+                    updated_manifest_obj = Manifest.model_validate(manifest_data)
+                    drive.write_manifest(updated_manifest_obj)
+                except Exception as mf_err:
+                    logger.warning("Could not rewrite manifest: %s", mf_err)
+
+    summary: dict[str, int] = {}
+    for c in changes:
+        key = c.get("sentiment", "highlight_reel")
+        summary[key] = summary.get(key, 0) + 1
+    return {
+        "status": "blocked" if blocked and not changes else "complete",
+        "dry_run": dry_run,
+        "organized_clips_count": len(changes),
+        "summary": summary,
+        "blocked_needs_kit_check": blocked,
+        "changes": changes,
+    }
+
+
+@app.route("/drive/organize-moments", methods=["POST"])
+def organize_moments() -> Response:
+    """
+    Body: {match_id?, dry_run?: bool = true, opponent_kit?: str, background?: bool}
+    background=true returns a job_id immediately; poll GET /jobs/<job_id> for progress/result.
+    """
+    data = request.get_json(silent=True) or {}
+    match_filter = data.get("match_id")
+    # Safe by default: callers must explicitly pass dry_run=false to move files
+    dry_run = bool(data.get("dry_run", True))
+    opponent_kit: Optional[str] = data.get("opponent_kit")
+
+    if data.get("background"):
+        job_id = uuid.uuid4().hex[:8]
+        job = {
+            "job_id": job_id, "kind": "organize", "match_id": match_filter, "dry_run": dry_run,
+            "stage": "starting", "stage_description": "Listing clips...", "progress_pct": 0,
+            "result": None, "error": None, "created_at": time.time(), "updated_at": time.time(),
+        }
+        _save_job(job_id, job)
+
+        def on_progress(done: int, total: int, fname: str, folder: str) -> None:
+            job["stage"] = "classifying"
+            job["progress_pct"] = int(done / max(total, 1) * 100)
+            job["stage_description"] = f"Checked {done}/{total}: {fname}"
+            job["updated_at"] = time.time()
+            _save_job(job_id, job)
+
+        def worker() -> None:
+            try:
+                job["result"] = _run_organize(match_filter, dry_run, opponent_kit, progress=on_progress)
+                job["stage"], job["progress_pct"] = "complete", 100
+                job["stage_description"] = "Done"
+            except Exception as exc:
+                logger.exception("Organize job %s failed: %s", job_id, exc)
+                job["stage"], job["error"] = "error", f"{type(exc).__name__}: {str(exc)[:200]}"
+            job["updated_at"] = time.time()
+            _save_job(job_id, job)
+
+        threading.Thread(target=worker, daemon=True).start()
+        return jsonify({"status": "processing", "job_id": job_id}), 202
+
+    try:
+        return jsonify(_run_organize(match_filter, dry_run, opponent_kit))
     except Exception as exc:
         logger.exception("Failed to organize moments: %s", exc)
         return jsonify({"error": str(exc)}), 500
@@ -1253,9 +1592,15 @@ def batch_extract() -> Response:
 @app.route("/highlights/build", methods=["POST"])
 def build_highlights() -> Response:
     data = request.get_json(silent=True) or {}
-    match_id: Optional[str] = data.get("match_id", "20260822-san-francisco-fog-rfc-a-side-vs-sydney-convicts-1-v4fb17b0")
-    formats: list[str] = data.get("formats", ["16:9", "9:16"])
-    zoom: float = float(data.get("zoom", 1.25))
+    match_id: Optional[str] = data.get("match_id")
+    if not match_id:
+        return jsonify({"error": "match_id is required"}), 400
+    formats: list[str] = [f for f in data.get("formats", ["16:9", "9:16"]) if f in ("16:9", "9:16")]
+    if not formats:
+        return jsonify({"error": "formats must include '16:9' and/or '9:16'"}), 400
+    zoom: float = min(max(float(data.get("zoom", 1.25)), 1.0), 2.0)
+    max_moments: int = min(max(int(data.get("max_moments", 8)), 1), 20)
+    event_tag: str = str(data.get("event_tag", "MATCH HIGHLIGHTS"))[:60]
     stream: bool = bool(data.get("stream", True))
 
     job_id = uuid.uuid4().hex[:8]
@@ -1288,7 +1633,7 @@ def build_highlights() -> Response:
 
         def _stream_worker():
             try:
-                res = run_highlights_job(job_id=job_id, match_id=match_id, formats=formats, zoom=zoom, progress_callback=on_progress)
+                res = run_highlights_job(job_id=job_id, match_id=match_id, formats=formats, zoom=zoom, max_moments=max_moments, event_tag=event_tag, progress_callback=on_progress)
                 job = _get_job(job_id) or initial_job_data
                 job["stage"] = "complete"
                 job["progress_pct"] = 100
@@ -1331,7 +1676,7 @@ def build_highlights() -> Response:
                 job["updated_at"] = time.time()
                 _save_job(job_id, job)
 
-            res = run_highlights_job(job_id=job_id, match_id=match_id, formats=formats, zoom=zoom, progress_callback=on_progress)
+            res = run_highlights_job(job_id=job_id, match_id=match_id, formats=formats, zoom=zoom, max_moments=max_moments, event_tag=event_tag, progress_callback=on_progress)
             job = _get_job(job_id) or initial_job_data
             job["stage"] = "complete"
             job["progress_pct"] = 100
