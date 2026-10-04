@@ -177,3 +177,38 @@ class TestGeminiErrorLogging(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+import shutil as _shutil
+import subprocess as _subprocess
+import pytest as _pytest
+
+
+@_pytest.mark.skipif(_shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_classify_event_sends_small_video_proxy(tmp_path):
+    clip = tmp_path / "clip.mp4"
+    _subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=30:duration=40",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=40", "-c:v", "libx264", "-preset", "ultrafast",
+        "-c:a", "aac", "-shortest", str(clip)], check=True, capture_output=True)
+
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured["payload"] = json
+        return MagicMock(json=MagicMock(return_value={
+            "candidates": [{"content": {"parts": [{"text": '{"sentiment": "fog_positive", "confidence": 0.9, "kit_observed": "rainbow band", "decisive_action": "try"}'}]}}]
+        }))
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "k"}, clear=True), \
+         patch("engine.team_analyzer.requests.post", side_effect=fake_post):
+        res = classify_event({"event_type": "try", "start_time": 0.0, "duration": 40.0}, video_path=str(clip))
+
+    parts = captured["payload"]["contents"][0]["parts"]
+    media = [p for p in parts if "inline_data" in p]
+    assert len(media) == 1 and media[0]["inline_data"]["mime_type"] == "video/mp4"
+    import base64
+    proxy_bytes = len(base64.b64decode(media[0]["inline_data"]["data"]))
+    assert proxy_bytes < 5 * 1024 * 1024  # fits comfortably inline
+    assert res["sentiment"] == "fog_positive"
+    assert "rainbow band" in res["sentiment_rationale"]

@@ -156,6 +156,31 @@ def extract_moment_keyframes(
     return frame_paths
 
 
+MAX_PROXY_SECONDS = 30.0
+
+
+def make_video_proxy(video_path: str, start_time: float, duration: float, out_path: str) -> Optional[str]:
+    """
+    Small 720p / 10fps H.264 proxy with mono audio (~1-3 MB for 30s) so the whole
+    moment fits inline in one Gemini request. Returns None if ffmpeg fails.
+    """
+    dur = max(1.0, min(duration, MAX_PROXY_SECONDS))
+    cmd = [
+        "ffmpeg", "-y", "-ss", f"{max(0.0, start_time):.3f}", "-t", f"{dur:.3f}", "-i", video_path,
+        "-vf", "scale=-2:720,fps=10", "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "48k", "-ac", "1",
+        "-movflags", "+faststart", out_path,
+    ]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=120)
+        if res.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            return out_path
+        logger.warning("Video proxy failed: %s", res.stderr.decode()[-200:])
+    except Exception as e:
+        logger.warning("Video proxy error: %s", e)
+    return None
+
+
 def encode_image_base64(image_path: str) -> str:
     """Encode an image file to a base64 string."""
     with open(image_path, "rb") as f:
@@ -170,49 +195,61 @@ def classify_moment_with_gemini(
     fog_kit: str = DEFAULT_FOG_KIT,
     opponent_kit: str = DEFAULT_OPPONENT_KIT,
     api_key: Optional[str] = None,
+    video_clip_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Send extracted keyframes to Gemini Vision (Vertex AI or API key backend) to decide
-    if the play is a Fog Positive moment, an Opposing Team moment, or neutral.
+    Send the moment to Gemini (Vertex AI or API key backend) to decide if the play is a
+    Fog Positive moment, an Opposing Team moment, or neutral. A short video proxy
+    (video_clip_path) is preferred; keyframes are the fallback.
     """
     if gemini_backend(api_key) == "none":
         logger.warning("No Gemini backend configured (set GOOGLE_CLOUD_PROJECT or GEMINI_API_KEY). Routing to Needs Review.")
         return fallback_heuristic_classification(event_type, event_description, opponent_name)
 
-    if not keyframe_paths:
+    if not keyframe_paths and not video_clip_path:
         return fallback_heuristic_classification(event_type, event_description, opponent_name)
 
     # Build multimodal contents parts
     parts: List[Dict[str, Any]] = []
 
-    prompt = f"""You are a professional rugby video analyst reviewing frames of a detected rugby moment: '{event_type}' ({event_description}).
+    media_desc = (
+        "a short video clip (with audio) of" if video_clip_path else "still frames from"
+    )
+    prompt = f"""You are a professional rugby video analyst. You are given {media_desc} a moment auto-tagged by a Veo camera as '{event_type}' ({event_description}). The tagged action usually happens in the middle-to-late part of the clip.
 
 TEAMS & UNIFORMS:
 1. SF Fog RFC: {fog_kit}.
 2. {opponent_name}: {opponent_kit}.
 
 YOUR TASK:
-Inspect the players in the active play area (the ball carrier, try scorer, kicker, or scrum/lineout pack).
-1. Identify which team scores, kicks, or wins the contest.
-   - If a player in a rainbow-banded or blue jersey grounds the ball or carries forward, it is SF Fog RFC.
-   - If a player in the opponent kit grounds the ball or kicks, it is {opponent_name}.
-2. Assign 'sentiment':
-   - "fog_positive": SF Fog scores a try/conversion, wins a turnover/scrum/lineout, or makes a big play.
+1. Find the decisive action: who grounds the ball for a try, who kicks at goal, which pack wins the scrum, which jumper wins the lineout.
+2. Describe the kit of the player(s) making that action BEFORE deciding (shirt colour, any chest band, shorts colour).
+3. Decide the outcome:
+   - "fog_positive": SF Fog RFC scores a try/conversion, wins the scrum/lineout, wins a turnover or makes a big play.
    - "fog_negative": {opponent_name} scores, kicks, or wins the contest.
-   - "neutral": Inconclusive, whistle blown with no score, or contest contested evenly.
-3. Assign 'confidence' between 0.0 and 1.0.
-4. Provide a concise 'rationale' describing the jersey colors and play outcome.
+   - "neutral": you cannot clearly see the decisive action or the kit colours, or the contest is even.
+4. Confidence between 0.0 and 1.0. Be honest: if players are too small or far away to read the kit, use "neutral" with low confidence rather than guessing.
 
-Return ONLY a JSON object in this format:
+Return ONLY a JSON object:
 {{
+  "decisive_action": "Number 11 grounds the ball in the left corner",
+  "kit_observed": "navy shirt with rainbow chest band, white shorts",
   "sentiment": "fog_positive" | "fog_negative" | "neutral",
   "team": "sf_fog" | "opponent" | "unknown",
   "team_display": "SF Fog RFC" | "{opponent_name}" | "Contested",
-  "confidence": 0.95,
-  "rationale": "Player in rainbow-banded navy jersey grounds ball over try line."
+  "confidence": 0.0,
+  "rationale": "one sentence"
 }}
 """
     parts.append({"text": prompt})
+
+    if video_clip_path and os.path.exists(video_clip_path):
+        try:
+            parts.append({
+                "inline_data": {"mime_type": "video/mp4", "data": encode_image_base64(video_clip_path)}
+            })
+        except Exception as e:
+            logger.warning("Could not encode video proxy %s: %s", video_clip_path, e)
 
     for frame_path in keyframe_paths:
         if os.path.exists(frame_path):
@@ -258,7 +295,9 @@ Return ONLY a JSON object in this format:
                 return {
                     "sentiment": sentiment,
                     "sentiment_confidence": conf,
-                    "sentiment_rationale": parsed.get("rationale", ""),
+                    "sentiment_rationale": " | ".join(
+                        str(x) for x in (parsed.get("decisive_action"), parsed.get("kit_observed"), parsed.get("rationale")) if x
+                    ),
                     "team": parsed.get("team", default_team) if sentiment != "neutral" else "unknown",
                     "team_display": parsed.get("team_display", default_display) if sentiment != "neutral" else "Contested",
                     "classified_by": f"gemini:{gemini_backend(api_key)}:{gemini_model()}",
@@ -335,17 +374,17 @@ def classify_event(
 
     if video_path and os.path.exists(video_path):
         with tempfile.TemporaryDirectory(prefix="fog_frames_") as tmpdir:
-            frames = extract_moment_keyframes(video_path, start_t, dur, num_frames=3, output_dir=tmpdir)
+            common = dict(
+                event_type=ev_type, event_description=ev_desc, opponent_name=opponent_name,
+                fog_kit=fog_kit, opponent_kit=opponent_kit,
+            )
+            # Preferred: let Gemini watch the moment (motion + audio), not three stills
+            proxy = make_video_proxy(video_path, start_t, dur, os.path.join(tmpdir, "proxy.mp4"))
+            if proxy:
+                return classify_moment_with_gemini(keyframe_paths=[], video_clip_path=proxy, **common)
+            frames = extract_moment_keyframes(video_path, start_t, dur, num_frames=6, output_dir=tmpdir)
             if frames:
-                res = classify_moment_with_gemini(
-                    keyframe_paths=frames,
-                    event_type=ev_type,
-                    event_description=ev_desc,
-                    opponent_name=opponent_name,
-                    fog_kit=fog_kit,
-                    opponent_kit=opponent_kit,
-                )
-                return res
+                return classify_moment_with_gemini(keyframe_paths=frames, **common)
 
     return fallback_heuristic_classification(ev_type, ev_desc, opponent_name)
 
