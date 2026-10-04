@@ -799,6 +799,12 @@ def organize_moments() -> Response:
                             if os.path.exists(local_clip):
                                 os.remove(local_clip)
                         verdicts[cache_key] = sentiment_info
+                        logger.info(
+                            "Classified %s -> %s (%.2f) via %s [%d/%d]",
+                            fname, sentiment_info["sentiment"], sentiment_info.get("confidence", 0.0),
+                            sentiment_info.get("classified_by", "unverified"),
+                            match_videos.index(f) + 1, len(match_videos),
+                        )
 
                     primary_folder, nested = get_target_subfolder_path(
                         event_type, sentiment=sentiment_info["sentiment"], filename=fname
