@@ -289,6 +289,8 @@ Return ONLY a JSON object:
                 parsed = json.loads(raw_text)
                 sentiment = parsed.get("sentiment")
                 conf = max(0.0, min(1.0, float(parsed.get("confidence", 0.0))))
+                # Keep Gemini's raw call even when it's too unsure to file, so a human can approve it fast
+                lean = sentiment if sentiment in ("fog_positive", "fog_negative") else None
 
                 # Unknown label or low confidence -> Needs Review, never a Fog folder
                 if sentiment not in VALID_SENTIMENTS or conf < CONFIDENCE_THRESHOLD:
@@ -305,6 +307,7 @@ Return ONLY a JSON object:
                     "team": parsed.get("team", default_team) if sentiment != "neutral" else "unknown",
                     "team_display": parsed.get("team_display", default_display) if sentiment != "neutral" else "Contested",
                     "classified_by": f"gemini:{gemini_backend(api_key)}:{gemini_model()}",
+                    "lean": lean,
                 }
 
     except requests.HTTPError as exc:
@@ -429,4 +432,5 @@ def classify_event_sentiment(
         "confidence": res.get("sentiment_confidence", 0.0),
         "rationale": res.get("sentiment_rationale", ""),
         "classified_by": res.get("classified_by", "unverified"),
+        "lean": res.get("lean"),
     }

@@ -69,6 +69,10 @@
   .filters button { font: inherit; font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; padding: var(--space-1) var(--space-3);
     border: 1px solid var(--fog-dark-blue); background: var(--fog-white); color: var(--fog-dark-blue); cursor: pointer; }
   .filters button[aria-pressed="true"] { background: var(--fog-dark-blue); color: var(--fog-white); }
+  .mini { font: inherit; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding: 2px var(--space-2);
+    border: 1px solid var(--fog-dark-blue); background: var(--fog-white); color: var(--fog-dark-blue); cursor: pointer; margin: 0 4px 4px 0; }
+  .mini:hover { background: var(--fog-dark-blue); color: var(--fog-white); }
+  .lean { display: block; font-size: 0.75rem; margin-top: 4px; }
   .kit-img { width: 100%; height: auto; display: block; border: 1px solid var(--fog-gray); margin-top: var(--space-3); }
   .msg { margin-top: var(--space-3); padding: var(--space-3) var(--space-4); border-left: 4px solid var(--fog-blue); background: var(--fog-white); }
   .msg--error { border-color: var(--fog-red); }
@@ -142,6 +146,10 @@
         <div class="tile"><div class="n" id="tOpp">0</div><div class="l">Opponent</div></div>
         <div class="tile"><div class="n" id="tRev">0</div><div class="l">Needs review</div></div>
       </div>
+      <div class="row">
+        <button class="fog-button fog-button--secondary" id="acceptLeans" type="button">Accept AI leans of 70%+</button>
+        <span class="muted">Turns "leans Fog/Opponent" into a decision. Check a few with Watch first.</span>
+      </div>
       <div class="filters" role="group" aria-label="Filter clips">
         <button type="button" data-f="all" aria-pressed="true">All</button>
         <button type="button" data-f="fog_positive" aria-pressed="false">Fog</button>
@@ -150,7 +158,7 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Clip</th><th>Verdict</th><th>Conf.</th><th>Goes to</th><th>Why</th></tr></thead>
+          <thead><tr><th>Clip</th><th>Verdict</th><th>Conf.</th><th>Your call</th><th>Goes to</th><th>Why</th></tr></thead>
           <tbody id="sortRows"></tbody>
         </table>
       </div>
@@ -327,23 +335,80 @@
   $("kitCorrect").addEventListener("click", () => confirmKit(false));
   $("kitSwap").addEventListener("click", () => confirmKit(true));
 
+  const isMain = (c) => !c.file_name.includes("9x16");
+  const pct = (x) => Math.round((x || 0) * 100) + "%";
+  const leanName = (l) => l === "fog_positive" ? "Fog" : l === "fog_negative" ? "Opponent" : "";
+  function goesTo(c) {
+    if (!c.sentiment) return "Highlights";
+    if (c.sentiment === "fog_positive") return c.category;
+    return (c.sentiment === "fog_negative" ? "Opposing Team Videos / " : "Needs Review / ") + c.category;
+  }
+
+  function updateTiles() {
+    const main = lastChanges.filter(c => isMain(c) && c.sentiment);
+    const count = (k) => main.filter(c => c.sentiment === k).length;
+    $("tFog").textContent = count("fog_positive"); $("tOpp").textContent = count("fog_negative"); $("tRev").textContent = count("neutral");
+  }
+
+  async function setVerdicts(items) {
+    if (!items.length) return;
+    const r = await api("/api/verdict", { method: "POST", body: { match_id: currentMatch, verdicts: items } });
+    const saved = new Set(r.updated || []);
+    items.filter(v => saved.has(v.event_id)).forEach(v => {
+      lastChanges.filter(c => c.event_id === v.event_id).forEach(c => {
+        c.sentiment = v.sentiment; c.confidence = v.sentiment === "neutral" ? 0 : 1;
+        c.classified_by = "manual"; c.rationale = "Set by hand in Fog Studio";
+      });
+    });
+    if (r.missing && r.missing.length) message("sortMsg", `Couldn't find ${r.missing.length} moment(s) in the match file.`, "error");
+    dryRunDone = true; updateApply(); updateTiles(); renderRows();
+  }
+
   function renderRows() {
     const body = $("sortRows");
     body.textContent = "";
     lastChanges
-      .filter(c => !c.file_name.includes("9x16"))
+      .filter(isMain)
       .filter(c => filter === "all" || c.sentiment === filter)
       .forEach(c => {
         const tr = document.createElement("tr");
-        const cell = (content) => { const td = document.createElement("td"); if (content instanceof Node) td.appendChild(content); else td.textContent = content; tr.appendChild(td); };
+        const cell = (content) => { const td = document.createElement("td"); if (content instanceof Node) td.appendChild(content); else td.textContent = content; tr.appendChild(td); return td; };
         cell(c.file_name.replace(/^\d{8}_[^_]+_fog-rugby_16x9_/, ""));
-        cell(verdictTag(c.sentiment));
-        cell(c.confidence != null ? Math.round(c.confidence * 100) + "%" : "");
-        cell((c.target_folder || "").split("/").slice(1).join(" / "));
+        const vt = cell(verdictTag(c.sentiment));
+        if (c.sentiment === "neutral" && c.lean) {
+          const l = document.createElement("span"); l.className = "lean";
+          l.textContent = `leans ${leanName(c.lean)} ${pct(c.confidence)}`; vt.appendChild(l);
+        }
+        cell(c.sentiment && c.confidence != null ? pct(c.confidence) : "");
+        const call = cell("");
+        if (c.sentiment && c.event_id) {
+          if (c.classified_by === "manual") {
+            const t = document.createElement("span"); t.className = "lean"; t.textContent = "Set by you"; call.appendChild(t);
+          }
+          [["Fog", "fog_positive"], ["Opp", "fog_negative"]].forEach(([label, val]) => {
+            if (c.classified_by === "manual" && c.sentiment === val) return;
+            const b = document.createElement("button"); b.type = "button"; b.className = "mini"; b.textContent = label;
+            b.addEventListener("click", () => setVerdicts([{ event_id: c.event_id, sentiment: val }]).catch(e => message("sortMsg", e.message, "error")));
+            call.appendChild(b);
+          });
+        }
+        if (c.file_id) {
+          const a = document.createElement("a"); a.href = `https://drive.google.com/file/d/${encodeURIComponent(c.file_id)}/view`;
+          a.target = "_blank"; a.rel = "noopener"; a.textContent = "Watch"; call.appendChild(a);
+        }
+        cell(goesTo(c));
         cell(c.rationale || "");
         body.appendChild(tr);
       });
   }
+
+  $("acceptLeans").addEventListener("click", () => {
+    const items = lastChanges.filter(c => isMain(c) && c.sentiment === "neutral" && c.lean && c.event_id && (c.confidence || 0) >= 0.7)
+      .map(c => ({ event_id: c.event_id, sentiment: c.lean }));
+    if (!items.length) return message("sortMsg", "No AI leans of 70%+ left to accept.", "ok");
+    if (!confirm(`Accept the AI's lean for ${items.length} moment(s)?`)) return;
+    setVerdicts(items).then(() => message("sortMsg", `Accepted ${items.length} lean(s). Apply when ready.`, "ok")).catch(e => message("sortMsg", e.message, "error"));
+  });
   document.querySelectorAll(".filters button").forEach(b => b.addEventListener("click", () => {
     filter = b.dataset.f;
     document.querySelectorAll(".filters button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
@@ -363,10 +428,8 @@
         const r = job.result || {};
         if (r.status === "blocked") return message("sortMsg", "Blocked: confirm the kit check for this match first.", "error");
         lastChanges = r.changes || [];
-        const sm = r.summary || {};
-        const half = (n) => Math.ceil((n || 0) / 2);
-        $("tFog").textContent = half(sm.fog_positive); $("tOpp").textContent = half(sm.fog_negative); $("tRev").textContent = half(sm.neutral);
         $("sortResults").classList.remove("hidden");
+        updateTiles();
         renderRows();
         if (dry) { dryRunDone = true; message("sortMsg", "Dry run done. Nothing moved. Check the list, then Apply.", "ok"); }
         else { message("sortMsg", "Applied. Files are in their folders in Drive.", "ok"); loadStatus(false); }

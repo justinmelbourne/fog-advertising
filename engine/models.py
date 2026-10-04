@@ -38,6 +38,8 @@ class Event(BaseModel):
     team: Optional[str] = Field(default="unknown", description="'sf_fog', 'opponent', or 'unknown'")
     team_display: Optional[str] = Field(default=None, description="Display name of scoring/winning team")
     classified_by: Optional[str] = Field(default=None, description="e.g. 'gemini:<model>', 'manual', 'unverified'")
+    # Gemini's raw call ('fog_positive'/'fog_negative') even when below the filing threshold
+    sentiment_lean: Optional[str] = None
 
 class Manifest(BaseModel):
     match_id: str

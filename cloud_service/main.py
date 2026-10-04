@@ -875,6 +875,11 @@ def kit_check_confirm() -> Response:
             fog_kit=data.get("fog_kit"),
             opponent_kit=data.get("opponent_kit"),
         )
+        # Kits changed: AI verdicts made against the old kits are stale. Human verdicts stay.
+        for ev in manifest_data.get("events", []):
+            if (ev.get("classified_by") or "").startswith("gemini:"):
+                ev.update({"sentiment": "neutral", "sentiment_confidence": 0.0, "sentiment_rationale": None,
+                           "team": "unknown", "team_display": None, "classified_by": None, "sentiment_lean": None})
         drive.write_manifest(Manifest.model_validate(manifest_data))
         kc = manifest_data["kit_check"]
         return jsonify({"status": "confirmed", "match_id": match_id,
@@ -884,8 +889,24 @@ def kit_check_confirm() -> Response:
         return jsonify({"error": f"Kit check confirm failed: {type(exc).__name__}"}), 500
 
 
+def _stored_verdict(ev: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """A verdict already saved on the manifest event (Gemini or a human), reused instead of re-asking."""
+    by = ev.get("classified_by") or ""
+    if not (by == "manual" or by.startswith("gemini:")):
+        return None
+    return {
+        "sentiment": ev.get("sentiment") or "neutral",
+        "team": ev.get("team") or "unknown",
+        "team_display": ev.get("team_display") or "Contested",
+        "confidence": ev.get("sentiment_confidence") or 0.0,
+        "rationale": ev.get("sentiment_rationale") or "",
+        "classified_by": by,
+        "lean": ev.get("sentiment_lean"),
+    }
+
+
 def _run_organize(match_filter: Optional[str], dry_run: bool, opponent_kit: Optional[str],
-                  progress: Optional[Any] = None) -> dict[str, Any]:
+                  progress: Optional[Any] = None, reclassify: bool = False) -> dict[str, Any]:
     """Sort a match folder's clips by footage-verified verdict. progress(done, total, file, match)."""
     drive = DriveClient()
     changes = []
@@ -993,6 +1014,11 @@ def _run_organize(match_filter: Optional[str], dry_run: bool, opponent_kit: Opti
 
                 cache_key = ev_id or fname
                 sentiment_info = verdicts.get(cache_key)
+                if sentiment_info is None and ev_data and not (reclassify and ev_data.get("classified_by") != "manual"):
+                    # Reuse what was reviewed in the dry run (and never overwrite a human verdict)
+                    sentiment_info = _stored_verdict(ev_data)
+                    if sentiment_info is not None:
+                        verdicts[cache_key] = sentiment_info
                 if sentiment_info is None:
                     local_clip = os.path.join(tmpdir, f"{fid}.mp4")
                     try:
@@ -1047,15 +1073,17 @@ def _run_organize(match_filter: Optional[str], dry_run: bool, opponent_kit: Opti
                     "confidence": sentiment_info["confidence"],
                     "rationale": sentiment_info.get("rationale", ""),
                     "classified_by": sentiment_info.get("classified_by", "unverified"),
+                    "lean": sentiment_info.get("lean"),
                     "target_folder": target_folder_name,
                 })
 
-        # 4. Write the footage-based verdicts back onto manifest events (no re-guessing)
-        if manifest_data and "events" in manifest_data and not dry_run:
+        # 4. Save verdicts on the manifest (dry run too: classifying moves nothing, and Apply
+        #    must file exactly what was reviewed instead of re-asking Gemini)
+        if manifest_data and "events" in manifest_data:
             manifest_updated = False
             for ev in manifest_data["events"]:
                 v = verdicts.get(ev.get("event_id", ""))
-                if not v:
+                if not v or (ev.get("classified_by") == "manual" and v.get("classified_by") != "manual"):
                     continue
                 ev["sentiment"] = v["sentiment"]
                 ev["sentiment_confidence"] = v["confidence"]
@@ -1063,6 +1091,7 @@ def _run_organize(match_filter: Optional[str], dry_run: bool, opponent_kit: Opti
                 ev["team"] = v["team"]
                 ev["team_display"] = v["team_display"]
                 ev["classified_by"] = v.get("classified_by")
+                ev["sentiment_lean"] = v.get("lean")
                 manifest_updated = True
 
             if manifest_updated:
@@ -1086,6 +1115,52 @@ def _run_organize(match_filter: Optional[str], dry_run: bool, opponent_kit: Opti
     }
 
 
+@app.route("/api/verdict", methods=["POST"])
+def api_verdict() -> Response:
+    """
+    Human verdict for one or more events; never re-guessed by Gemini afterwards.
+    Body: {match_id, verdicts: [{event_id, sentiment: fog_positive|fog_negative|neutral}]}
+    """
+    data = request.get_json(silent=True) or {}
+    match_id = data.get("match_id")
+    items = data.get("verdicts") or []
+    allowed = ("fog_positive", "fog_negative", "neutral")
+    if not match_id or not items or any(v.get("sentiment") not in allowed or not v.get("event_id") for v in items):
+        return jsonify({"error": "match_id and verdicts [{event_id, sentiment}] are required"}), 400
+    try:
+        drive = DriveClient()
+        folder = _find_match_folder(drive, match_id)
+        if not folder:
+            return jsonify({"error": f"No match folder found for {match_id}"}), 404
+        manifest_data = _load_match_manifest(drive, folder["id"], folder["name"])
+        if not manifest_data:
+            return jsonify({"error": f"No manifest found for {match_id}"}), 404
+        by_id = {e.get("event_id"): e for e in manifest_data.get("events", [])}
+        opponent = manifest_data.get("opponent_name") or "Opponent"
+        updated, missing = [], []
+        for v in items:
+            ev = by_id.get(v["event_id"])
+            if not ev:
+                missing.append(v["event_id"])
+                continue
+            sent = v["sentiment"]
+            ev.update({
+                "sentiment": sent,
+                "sentiment_confidence": 1.0 if sent != "neutral" else 0.0,
+                "sentiment_rationale": "Set by hand in Fog Studio",
+                "team": {"fog_positive": "sf_fog", "fog_negative": "opponent"}.get(sent, "unknown"),
+                "team_display": {"fog_positive": "SF Fog RFC", "fog_negative": opponent}.get(sent, "Contested"),
+                "classified_by": "manual",
+            })
+            updated.append(v["event_id"])
+        if updated:
+            drive.write_manifest(Manifest.model_validate(manifest_data))
+        return jsonify({"status": "saved", "updated": updated, "missing": missing})
+    except Exception as exc:
+        logger.exception("Saving verdicts failed for %s: %s", match_id, exc)
+        return jsonify({"error": f"Saving verdicts failed: {type(exc).__name__}"}), 500
+
+
 @app.route("/drive/organize-moments", methods=["POST"])
 def organize_moments() -> Response:
     """
@@ -1097,6 +1172,7 @@ def organize_moments() -> Response:
     # Safe by default: callers must explicitly pass dry_run=false to move files
     dry_run = bool(data.get("dry_run", True))
     opponent_kit: Optional[str] = data.get("opponent_kit")
+    reclassify = bool(data.get("reclassify", False))
 
     if data.get("background"):
         job_id = uuid.uuid4().hex[:8]
@@ -1116,7 +1192,7 @@ def organize_moments() -> Response:
 
         def worker() -> None:
             try:
-                job["result"] = _run_organize(match_filter, dry_run, opponent_kit, progress=on_progress)
+                job["result"] = _run_organize(match_filter, dry_run, opponent_kit, progress=on_progress, reclassify=reclassify)
                 job["stage"], job["progress_pct"] = "complete", 100
                 job["stage_description"] = "Done"
             except Exception as exc:
@@ -1129,7 +1205,7 @@ def organize_moments() -> Response:
         return jsonify({"status": "processing", "job_id": job_id}), 202
 
     try:
-        return jsonify(_run_organize(match_filter, dry_run, opponent_kit))
+        return jsonify(_run_organize(match_filter, dry_run, opponent_kit, reclassify=reclassify))
     except Exception as exc:
         logger.exception("Failed to organize moments: %s", exc)
         return jsonify({"error": str(exc)}), 500
