@@ -130,5 +130,20 @@ class TestTeamAnalyzer(unittest.TestCase):
         self.assertEqual(res["team_display"], "Sydney Convicts")
         self.assertAlmostEqual(res["sentiment_confidence"], 0.98)
 
+class TestGeminiErrorLogging(unittest.TestCase):
+    @patch("engine.team_analyzer.requests.post")
+    def test_http_error_logs_status_without_key(self, mock_post):
+        import requests as _rq
+        resp = MagicMock(status_code=429)
+        resp.json.return_value = {"error": {"status": "RESOURCE_EXHAUSTED"}}
+        mock_post.return_value = MagicMock(raise_for_status=MagicMock(side_effect=_rq.HTTPError(response=resp)))
+        with self.assertLogs("engine.team_analyzer", level="WARNING") as logs:
+            res = classify_moment_with_gemini(["/tmp/fake_frame.jpg"], "try", api_key="secret-key")
+        self.assertEqual(res["sentiment"], "neutral")
+        joined = "\n".join(logs.output)
+        self.assertIn("HTTP 429 RESOURCE_EXHAUSTED", joined)
+        self.assertNotIn("secret-key", joined)
+
+
 if __name__ == "__main__":
     unittest.main()

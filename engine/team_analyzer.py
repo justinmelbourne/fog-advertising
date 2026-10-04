@@ -218,8 +218,19 @@ Return ONLY a JSON object in this format:
                     "classified_by": f"gemini:{gemini_model()}",
                 }
 
+    except requests.HTTPError as exc:
+        # Status + Google's error status only; never the request/URL (could carry secrets)
+        status_code = exc.response.status_code if exc.response is not None else "?"
+        google_status = ""
+        try:
+            google_status = (exc.response.json().get("error") or {}).get("status", "")
+        except Exception:
+            pass
+        logger.warning(
+            "Gemini classification failed: HTTP %s %s (model=%s). Routing to Needs Review.",
+            status_code, google_status, gemini_model(),
+        )
     except Exception as exc:
-        # Log the type only: HTTP error text can echo request details
         logger.warning("Gemini classification request failed (%s). Routing to Needs Review.", type(exc).__name__)
 
     return fallback_heuristic_classification(event_type, event_description, opponent_name)
