@@ -20,6 +20,7 @@ from engine.naming import (
     get_social_clip_filename,
     get_highlight_reel_filename,
     get_match_folder_name,
+    parse_match_identifiers,
     slugify_moment,
     get_target_subfolder_path,
     FOLDER_HIGHLIGHTS,
@@ -407,122 +408,121 @@ def run_batch_extract_job(
 def run_highlights_job(
     job_id: str,
     match_id: str,
-    formats: list[str] = ["16:9", "9:16"],
+    formats: Optional[list[str]] = None,
     zoom: float = 1.25,
+    max_moments: int = 8,
+    event_tag: str = "MATCH HIGHLIGHTS",
     progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> dict[str, Any]:
     """
-    Server-side Cloud Run worker that compiles 16:9 Broadcast Highlights
-    and 9:16 Vertical Action-Zoom Highlights directly in Google Drive.
+    Build highlight reels for ANY match from its manifest:
+      1. Read manifest, keep only verified Fog-positive moments (Gemini >= 0.75)
+      2. Download each source match video once
+      3. Frame-accurate cuts straight from the master -> 16:9 and/or 9:16 reels
+      4. Upload to <match folder>/Highlights/
     """
-    from engine.highlight_packager import build_16x9_reel, build_9x16_reel
-    from googleapiclient.http import MediaFileUpload
+    from engine.highlight_packager import (
+        build_16x9_reel, build_9x16_reel, select_reel_moments, plan_segments, hook_first,
+    )
+
+    formats = formats or ["16:9", "9:16"]
+
+    def report(stage: str, pct: int, desc: str) -> None:
+        if progress_callback:
+            progress_callback({"stage": stage, "progress_pct": pct, "stage_description": desc})
 
     drive = DriveClient()
     output_folder_id = os.environ["DRIVE_OUTPUT_FOLDER_ID"]
+
+    report("scanning", 3, "Reading match manifest...")
+    manifest_data = drive.read_manifest(match_id)
+    if not manifest_data:
+        raise ValueError(f"Manifest not found for match_id: {match_id}")
+    manifest = Manifest.model_validate(manifest_data)
+
+    moments = select_reel_moments([e.model_dump() for e in manifest.events], max_moments=max_moments)
+    if not moments:
+        raise ValueError(
+            "No verified Fog-positive moments in this match yet. Run /drive/organize-moments "
+            "with dry_run=false (or approve clips in Needs Review) before building highlights."
+        )
+
+    _, _, opponent_slug = parse_match_identifiers(match_id)
+    opponent_display = (
+        manifest_data.get("opponent_name")
+        or (opponent_slug.replace("-", " ").upper() if opponent_slug else "OPPONENT")
+    )
+
     match_folder_id = drive.get_or_create_match_folder(output_folder_id, match_id)
-
-    if progress_callback:
-        progress_callback({"stage": "scanning", "progress_pct": 5, "stage_description": "Locating match clips in Google Drive..."})
-
-    # Search in both the match folder and the root output folder
-    out_files = drive.list_all_files(match_folder_id) + drive.list_all_files(output_folder_id)
-
-    events_needed = [
-        'veo_evt_028', 'veo_evt_004', 'veo_evt_017', 'veo_evt_010',
-        'veo_evt_034', 'veo_evt_038', 'veo_evt_032', 'veo_evt_036'
-    ]
+    highlights_folder_id = drive.get_or_create_subfolder(match_folder_id, FOLDER_HIGHLIGHTS)
+    uploaded_reels: dict[str, Any] = {}
 
     with tempfile.TemporaryDirectory(prefix=f"highlights_{job_id}_") as tmpdir:
-        raw_dir = os.path.join(tmpdir, "raw")
-        os.makedirs(raw_dir, exist_ok=True)
-        clip_paths = {}
+        # Download each source referenced by the selected moments exactly once
+        source_paths: dict[str, str] = {}
+        needed = sorted({m.get("source_id", "") for m in moments})
+        for idx, source_id in enumerate(needed):
+            source = next((s for s in manifest.sources if s.source_id == source_id), None)
+            file_id = _resolve_source_file_id(drive, match_id, source)
+            if not file_id:
+                logger.warning("[%s] Source %s not found in Drive; skipping its moments", job_id, source_id)
+                continue
+            report("downloading", 5 + int(idx / max(len(needed), 1) * 15),
+                   f"Downloading match video {idx + 1}/{len(needed)} to the Cloud Run worker...")
+            local = os.path.join(tmpdir, f"source_{idx}.mp4")
+            drive.download_file_to_path(file_id, local)
+            source_paths[source_id] = local
 
-        for idx, ev_id in enumerate(events_needed):
-            # Locate file matching event id and 16x9 or master
-            fid = None
-            for f in out_files:
-                fname = f["name"]
-                if (fname == f"{ev_id}_master_16x9.mp4") or (ev_id in fname and ("16x9" in fname or "master" in fname)):
-                    fid = f["id"]
-                    break
+        if not source_paths:
+            raise ValueError(f"Could not locate any source match video in Drive for {match_id}")
 
-            if not fid:
-                raise ValueError(f"Required master clip for {ev_id} not found in Drive output folder or match subfolder.")
-
-            local_path = os.path.join(raw_dir, f"{ev_id}.mp4")
-            if progress_callback:
-                progress_callback({
-                    "stage": "downloading",
-                    "progress_pct": int(5 + (idx / len(events_needed)) * 15),
-                    "stage_description": f"Streaming {ev_id} ({idx+1}/{len(events_needed)}) to Cloud Run worker..."
-                })
-            drive.download_file_to_path(fid, local_path)
-            clip_paths[ev_id] = local_path
-
-        uploaded_reels = {}
-
-        # Create or retrieve Highlights subfolder inside match folder
-        highlights_folder_id = drive.get_or_create_subfolder(match_folder_id, FOLDER_HIGHLIGHTS)
-
-        # 16:9 Broadcast Reel
+        render_plan = []
         if "16:9" in formats:
-            def p_16x9(pct: int, desc: str):
-                if progress_callback:
-                    progress_callback({"stage": "rendering_16x9", "progress_pct": int(20 + pct * 0.35), "stage_description": desc})
-
-            reel_16x9_name = get_highlight_reel_filename(match_id, "16x9", "match-highlights")
-            reel_16x9 = os.path.join(tmpdir, reel_16x9_name)
-            build_16x9_reel(tmpdir, clip_paths, reel_16x9, progress_fn=p_16x9)
-
-            if progress_callback:
-                progress_callback({"stage": "uploading", "progress_pct": 55, "stage_description": "Uploading 16:9 Broadcast Highlights to Drive..."})
-
-            media = MediaFileUpload(reel_16x9, mimetype="video/mp4", resumable=True)
-            res = drive._service.files().create(
-                body={"name": reel_16x9_name, "parents": [highlights_folder_id]},
-                media_body=media,
-                supportsAllDrives=True
-            ).execute()
-            uploaded_reels["16:9"] = {
-                "file_id": res["id"],
-                "name": reel_16x9_name,
-                "url": f"https://drive.google.com/file/d/{res['id']}/view?usp=drivesdk"
-            }
-
-        # 9:16 Vertical Action-Zoom Reel
+            render_plan.append(("16:9", "16x9", 20, 55))
         if "9:16" in formats:
-            def p_9x16(pct: int, desc: str):
-                if progress_callback:
-                    progress_callback({"stage": "rendering_9x16", "progress_pct": int(55 + pct * 0.40), "stage_description": desc})
+            render_plan.append(("9:16", "9x16", 55 if "16:9" in formats else 20, 95))
 
-            reel_9x16_name = get_highlight_reel_filename(match_id, "9x16", "match-highlights")
-            reel_9x16 = os.path.join(tmpdir, reel_9x16_name)
-            build_9x16_reel(tmpdir, clip_paths, reel_9x16, progress_fn=p_9x16)
+        for fmt, dims, lo, hi in render_plan:
+            def p_fn(pct: int, desc: str, lo=lo, hi=hi, dims=dims) -> None:
+                report(f"rendering_{dims}", int(lo + pct / 100 * (hi - lo)), desc)
 
-            if progress_callback:
-                progress_callback({"stage": "uploading", "progress_pct": 95, "stage_description": "Uploading 9:16 Action-Zoom Reel to Drive..."})
+            reel_name = get_highlight_reel_filename(match_id, dims, "match-highlights")
+            reel_path = os.path.join(tmpdir, reel_name)
+            segments = plan_segments(moments, source_paths, vertical=(fmt == "9:16"))
+            if fmt == "16:9":
+                build_16x9_reel(tmpdir, segments, reel_path, opponent_display=opponent_display,
+                                event_tag=event_tag, progress_fn=p_fn)
+            else:
+                segments = hook_first(segments, moments)
+                build_9x16_reel(tmpdir, segments, reel_path,
+                                header_text=f"SF FOG RFC vs {opponent_display}", zoom=zoom, progress_fn=p_fn)
 
-            media = MediaFileUpload(reel_9x16, mimetype="video/mp4", resumable=True)
-            res = drive._service.files().create(
-                body={"name": reel_9x16_name, "parents": [highlights_folder_id]},
-                media_body=media,
-                supportsAllDrives=True
-            ).execute()
-            uploaded_reels["9:16"] = {
-                "file_id": res["id"],
-                "name": reel_9x16_name,
-                "url": f"https://drive.google.com/file/d/{res['id']}/view?usp=drivesdk"
+            report("uploading", hi, f"Uploading {fmt} reel to Drive...")
+            file_id = drive.upsert_file_to_folder(reel_path, reel_name, highlights_folder_id)
+            uploaded_reels[fmt] = {
+                "file_id": file_id,
+                "name": reel_name,
+                "url": f"https://drive.google.com/file/d/{file_id}/view?usp=drivesdk",
+                "moments": [s["event_id"] for s in segments],
             }
 
-        if progress_callback:
-            progress_callback({"stage": "complete", "progress_pct": 100, "stage_description": "Highlights generated and saved to Drive!"})
+    report("finalizing", 99, "Reels uploaded, finishing up...")
+    return {"status": "complete", "match_id": match_id, "reels": uploaded_reels}
 
-        return {
-            "status": "complete",
-            "match_id": match_id,
-            "reels": uploaded_reels
-        }
+
+def _resolve_source_file_id(drive: DriveClient, match_id: str, source: Optional[VideoSource]) -> Optional[str]:
+    """Find the Drive file id for a manifest source: explicit id, then ingest folder by name, then the downloads map."""
+    if source and source.drive_file_id:
+        return source.drive_file_id
+    source_filename = source.filename if source else f"{match_id}_1080p.mp4"
+    ingest_folder_id = os.environ.get("DRIVE_INGEST_FOLDER_ID", "")
+    if ingest_folder_id:
+        for f in drive.list_video_files(ingest_folder_id):
+            if f["name"] == source_filename or match_id in f["name"]:
+                return f["id"]
+    existing = drive.list_downloaded_videos_map()
+    info = existing.get(match_id) or existing.get(source_filename)
+    return info.get("file_id") if info else None
 
 
 # ---------------------------------------------------------------------------

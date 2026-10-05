@@ -1,5 +1,5 @@
 # engine/models.py
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 class VideoSource(BaseModel):
@@ -31,11 +31,15 @@ class Event(BaseModel):
     suggested_caption: str = ""
     suggested_hashtags: List[str] = Field(default_factory=list)
     status: str = "pending_review"
-    sentiment: Optional[str] = Field(default="fog_positive", description="'fog_positive', 'fog_negative', or 'neutral'")
-    sentiment_confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    # Unclassified events are 'neutral' (Needs Review) until Gemini verifies them from footage
+    sentiment: Optional[str] = Field(default="neutral", description="'fog_positive', 'fog_negative', or 'neutral'")
+    sentiment_confidence: Optional[float] = Field(default=0.0, ge=0.0, le=1.0)
     sentiment_rationale: Optional[str] = None
-    team: Optional[str] = Field(default="sf_fog", description="'sf_fog' or 'opponent'")
-    team_display: Optional[str] = Field(default="SF Fog RFC", description="Display name of scoring/winning team")
+    team: Optional[str] = Field(default="unknown", description="'sf_fog', 'opponent', or 'unknown'")
+    team_display: Optional[str] = Field(default=None, description="Display name of scoring/winning team")
+    classified_by: Optional[str] = Field(default=None, description="e.g. 'gemini:<model>', 'manual', 'unverified'")
+    # Gemini's raw call ('fog_positive'/'fog_negative') even when below the filing threshold
+    sentiment_lean: Optional[str] = None
 
 class Manifest(BaseModel):
     match_id: str
@@ -44,3 +48,6 @@ class Manifest(BaseModel):
     pitch: str = "Treasure Island Pitch 1, San Francisco"
     sources: List[VideoSource] = Field(default_factory=list)
     events: List[Event] = Field(default_factory=list)
+    opponent_name: Optional[str] = None
+    # Per-match kit calibration: {fog_kit, opponent_kit, confirmed, image_file_id, ...}
+    kit_check: Optional[Dict[str, Any]] = None
