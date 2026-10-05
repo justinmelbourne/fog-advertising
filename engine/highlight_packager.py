@@ -215,6 +215,23 @@ def plan_segments(
     return segments
 
 
+def hook_first(segments: List[Dict[str, Any]], moments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Social feeds decide in the first two seconds: open the vertical reel with the
+    single best moment (a try if there is one), then the rest in match order.
+    """
+    if len(segments) < 2:
+        return segments
+    by_id = {m.get("event_id"): m for m in moments}
+
+    def rank(seg: Dict[str, Any]):
+        m = by_id.get(seg.get("event_id"), {})
+        return (m.get("event_type") == "try", float(m.get("excitement_score") or 0.0))
+
+    best = max(range(len(segments)), key=lambda i: rank(segments[i]))
+    return [segments[best]] + segments[:best] + segments[best + 1:]
+
+
 def _render_card(png_path: str, out_path: str, seconds: float) -> None:
     subprocess.run([
         'ffmpeg', '-y', '-loop', '1', '-i', png_path,
@@ -330,10 +347,15 @@ def build_9x16_reel(
     header_text: str,
     zoom: float = 1.25,
     progress_fn: Optional[Callable[[int, str], None]] = None,
+    framing: str = "fit",
 ) -> None:
     """
-    Assemble the 9:16 social reel. Single ffmpeg pass per segment:
-    centre action-zoom crop -> Lanczos upscale -> unsharp -> branded overlay.
+    Assemble the 9:16 social reel. Single ffmpeg pass per segment, then branded overlay.
+
+    framing="fit" (default): a 4:3 window of the match frame, full width, over a
+    blurred, darkened fill of the same shot. Keeps the ball and both wings in
+    shot, so a try scored off-centre is never cropped out.
+    framing="crop": centre action-zoom crop (tighter, but misses off-centre play).
     """
     if not segments:
         raise ValueError("No verified Fog-positive segments to build a 9:16 reel from")
@@ -345,8 +367,22 @@ def build_9x16_reel(
     outro_vid = os.path.join(gfx_dir, "outro_9x16.mp4")
     _render_card(outro_png, outro_vid, 2.5)
 
-    # 9:16 window inside a 1080-tall frame, tightened by the zoom factor
-    crop_expr = f"crop=trunc(ih*9/16/{zoom}/2)*2:trunc(ih/{zoom}/2)*2:(iw-ow)/2:(ih-oh)/2"
+    if framing == "crop":
+        # 9:16 window inside a 1080-tall frame, tightened by the zoom factor
+        base_chain = (
+            f"[0:v]crop=trunc(ih*9/16/{zoom}/2)*2:trunc(ih/{zoom}/2)*2:(iw-ow)/2:(ih-oh)/2,"
+            "scale=1080:1920:flags=lanczos,unsharp=5:5:0.7:5:5:0.0,fps=30,setsar=1[base];"
+        )
+    else:
+        # Sharp 4:3 action window (1080x810) centred between the header and badge, blurred fill behind
+        base_chain = (
+            "[0:v]split=2[bgsrc][fgsrc];"
+            "[bgsrc]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,"
+            "boxblur=12:2,eq=brightness=-0.12,scale=1080:1920[bg];"
+            "[fgsrc]crop=trunc(ih*4/3/2)*2:ih:(iw-ow)/2:0,scale=1080:810:flags=lanczos,"
+            "unsharp=5:5:0.5:5:5:0.0[fg];"
+            "[bg][fg]overlay=0:(H-h)/2,fps=30,setsar=1[base];"
+        )
     try_total = sum(1 for s in segments if s["label"].startswith("TRY"))
 
     part_files = []
@@ -366,7 +402,7 @@ def build_9x16_reel(
             '-loop', '1', '-i', ol_png,
             *_segment_audio_inputs(seg["source_path"]),
             '-filter_complex',
-            f"[0:v]{crop_expr},scale=1080:1920:flags=lanczos,unsharp=5:5:0.7:5:5:0.0,fps=30,setsar=1[base];"
+            f"{base_chain}"
             f"[1:v]format=rgba,fade=t=in:st=0.3:d=0.3:alpha=1,fade=t=out:st={max(dur-0.6, 0.6)}:d=0.4:alpha=1[ol];"
             f"[base][ol]overlay=0:0:shortest=1[v]",
             '-map', '[v]', *_segment_audio_args(seg["source_path"]),

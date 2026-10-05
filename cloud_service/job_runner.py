@@ -422,7 +422,7 @@ def run_highlights_job(
       4. Upload to <match folder>/Highlights/
     """
     from engine.highlight_packager import (
-        build_16x9_reel, build_9x16_reel, select_reel_moments, plan_segments,
+        build_16x9_reel, build_9x16_reel, select_reel_moments, plan_segments, hook_first,
     )
 
     formats = formats or ["16:9", "9:16"]
@@ -493,6 +493,7 @@ def run_highlights_job(
                 build_16x9_reel(tmpdir, segments, reel_path, opponent_display=opponent_display,
                                 event_tag=event_tag, progress_fn=p_fn)
             else:
+                segments = hook_first(segments, moments)
                 build_9x16_reel(tmpdir, segments, reel_path,
                                 header_text=f"SF FOG RFC vs {opponent_display}", zoom=zoom, progress_fn=p_fn)
 

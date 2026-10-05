@@ -11,6 +11,7 @@ from engine.highlight_packager import (
     plan_segments,
     build_16x9_reel,
     build_9x16_reel,
+    hook_first,
 )
 
 
@@ -79,6 +80,9 @@ def test_reels_render_end_to_end(tmp_path):
     build_16x9_reel(str(tmp_path), plan_segments(moments, sources), str(out16), opponent_display="TEST XV")
     out9 = tmp_path / "reel9.mp4"
     build_9x16_reel(str(tmp_path), plan_segments(moments, sources, vertical=True), str(out9), header_text="SF FOG RFC vs TEST XV")
+    out9c = tmp_path / "reel9_crop.mp4"
+    build_9x16_reel(str(tmp_path), plan_segments(moments, sources, vertical=True), str(out9c),
+                    header_text="SF FOG RFC vs TEST XV", framing="crop")
 
     def probe(path):
         return subprocess.run(
@@ -86,6 +90,20 @@ def test_reels_render_end_to_end(tmp_path):
             capture_output=True, text=True, check=True).stdout
 
     p16, p9 = probe(out16), probe(out9)
+    assert "video,1080,1920" in probe(out9c)
     assert "video,1920,1080" in p16 and "audio" in p16
     assert "video,1080,1920" in p9 and "audio" in p9
     assert os.path.getsize(out16) > 0 and os.path.getsize(out9) > 0
+
+
+def test_hook_first_opens_with_best_try_then_match_order():
+    moments = [
+        _ev("scrum", "scrum", 100, score=0.95),
+        _ev("try_small", "try", 200, score=0.5),
+        _ev("try_big", "try", 300, score=0.9),
+        _ev("tackle", "big_tackle", 400, score=0.7),
+    ]
+    segs = plan_segments(moments, {"veo_main": "/m.mp4"}, vertical=True)
+    ordered = [s["event_id"] for s in hook_first(segs, moments)]
+    assert ordered == ["try_big", "scrum", "try_small", "tackle"]
+    assert hook_first(segs[:1], moments) == segs[:1]
