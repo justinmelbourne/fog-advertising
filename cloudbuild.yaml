@@ -1,13 +1,26 @@
 # SF Fog RFC Rugby Video Analysis — Cloud Run Deployment Config
 # =============================================================
-# Triggered automatically on push to main via Cloud Build trigger,
-# or manually via: gcloud builds submit --config=cloudbuild.yaml
+# Triggered automatically by the Cloud Build GitHub trigger "fog-studio-deploy"
+# (push to the deploy branch; _COMMIT_SHA=$SHORT_SHA), or manually via:
+#   gcloud builds submit --config=cloudbuild.yaml --substitutions=_COMMIT_SHA=$(git rev-parse --short HEAD)
+# Step 0 runs the test suite; any failure stops the build before anything deploys.
 #
 # Project:  sffog-video-analysis
 # Region:   us-west1
 # Registry: us-west1-docker.pkg.dev/sffog-video-analysis/fog-video/
 
 steps:
+  # 0. Test gate: nothing is built or deployed unless the suite passes
+  - name: 'python:3.11-slim'
+    id: 'tests'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg > /dev/null &&
+        pip install -q --no-cache-dir -r requirements.txt -r requirements-cloud.txt &&
+        python -m pytest -q
+
   # 1. Build the container image
   - name: 'gcr.io/cloud-builders/docker'
     args:
@@ -44,8 +57,9 @@ steps:
       - '--min-instances=1'
       - '--session-affinity'
       - '--no-cpu-throttling'
-      - '--set-env-vars=GOOGLE_CLOUD_PROJECT=sffog-video-analysis'
-      - '--set-secrets=GEMINI_API_KEY=gemini-api-key:latest,VEO_API_TOKEN=veo-api-token:latest,DRIVE_INGEST_FOLDER_ID=drive-ingest-folder-id:latest,DRIVE_OUTPUT_FOLDER_ID=drive-output-folder-id:latest'
+      # Gemini via Vertex AI as fog-video-sa (club project billing, no API key)
+      - '--set-env-vars=GOOGLE_CLOUD_PROJECT=sffog-video-analysis,GEMINI_BACKEND=vertex,GEMINI_MODEL=gemini-3.8-flash,VERTEX_LOCATION=global'
+      - '--set-secrets=FOG_API_KEY=fog-api-key:latest,VEO_API_TOKEN=veo-api-token:latest,DRIVE_INGEST_FOLDER_ID=drive-ingest-folder-id:latest,DRIVE_OUTPUT_FOLDER_ID=drive-output-folder-id:latest'
       - '--allow-unauthenticated'
 
 images:

@@ -11,4 +11,6 @@ output_clips/
 *.wav
 *.mov
 Bingham 2026/
-tests/
+.env
+.env.*
+.vscode/
