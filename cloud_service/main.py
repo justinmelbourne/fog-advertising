@@ -133,7 +133,7 @@ def add_cors_headers(response: Response) -> Response:
 
 
 # GETs that expose Drive contents need the key too (the /studio page itself is public, no data)
-_PROTECTED_GET_PREFIXES = ("/drive/debug", "/api/", "/kit-check/image")
+_PROTECTED_GET_PREFIXES = ("/drive/debug", "/api/", "/kit-check/image", "/veo/recordings")
 
 
 @app.before_request
@@ -743,6 +743,108 @@ def api_match_status() -> Response:
     except Exception as exc:
         logger.exception("Match status failed for %s: %s", match_id, exc)
         return jsonify({"error": f"Match status failed: {type(exc).__name__}"}), 500
+
+
+@app.route("/api/veo-new", methods=["GET"])
+def api_veo_new() -> Response:
+    """
+    Veo recordings that have no match folder in Drive yet. The Studio match list only
+    shows Drive folders, so a new game stays invisible there until it is imported.
+    """
+    try:
+        client = VeoApiClient(token=os.environ.get("VEO_API_TOKEN", ""))
+        recordings = client.list_club_recordings(fetch_all=True)
+        if not recordings:
+            return jsonify({"error": "Veo returned no recordings. The Veo token may have expired; check VEO_API_TOKEN."}), 502
+        drive = DriveClient()
+        folder_names = [
+            f["name"] for f in drive.list_all_files(drive._output_folder_id)
+            if f.get("mimeType") == "application/vnd.google-apps.folder"
+        ]
+        new = []
+        for r in recordings:
+            slug = r.get("slug") or r.get("identifier") or ""
+            if not slug:
+                continue
+            # Folders are named YYYYMMDD_UNIQUEID_sf-fog-vs-opponent, never the raw slug
+            uid = parse_match_identifiers(slug)[1]
+            if get_match_folder_name(slug) in folder_names or any(f"_{uid}_" in n for n in folder_names):
+                continue
+            new.append({
+                "slug": slug,
+                "title": r.get("title") or slug,
+                "start": r.get("start") or r.get("created"),
+                "status": r.get("processing_status"),
+                "is_expired": bool(r.get("is_expired")),
+            })
+        new.sort(key=lambda r: r.get("start") or "", reverse=True)
+        return jsonify({"recordings": new, "veo_total": len(recordings)})
+    except Exception as exc:
+        logger.exception("Listing new Veo recordings failed: %s", exc)
+        return jsonify({"error": f"Listing Veo recordings failed: {type(exc).__name__}"}), 500
+
+
+def _process_import_job(job_id: str, slug: str, title: str) -> None:
+    """Ingest a Veo game into Drive, then cut every Veo-tagged moment (16:9 + 9:16) into its match folder."""
+    job = _get_job(job_id) or {}
+
+    def update(**fields: Any) -> None:
+        job.update(fields, updated_at=time.time())
+        _save_job(job_id, job)
+
+    try:
+        client = VeoApiClient(token=os.environ.get("VEO_API_TOKEN", ""))
+        drive = DriveClient()
+        manifest_data = drive.read_manifest(slug)
+        if not manifest_data:
+            sub_id = f"{job_id}-ingest"
+            _save_job(sub_id, {"job_id": sub_id, "match_id": slug, "stage": "starting", "progress_pct": 0, "created_at": time.time()})
+            worker = threading.Thread(target=_process_veo_ingest_job, args=(sub_id, slug, title, client, False), daemon=True)
+            worker.start()
+            while worker.is_alive():
+                sub = _get_job(sub_id) or {}
+                update(stage="importing", progress_pct=int((sub.get("progress_pct") or 0) * 0.6),
+                       stage_description=sub.get("stage_description") or "Pulling the game from Veo...")
+                worker.join(timeout=2.0)
+            sub = _get_job(sub_id) or {}
+            if sub.get("stage") != "complete":
+                raise RuntimeError(sub.get("error") or "Veo import failed")
+            manifest_data = drive.read_manifest(slug)
+        events = (manifest_data or {}).get("events") or []
+        if not events:
+            raise RuntimeError("Veo has no tagged moments for this game yet. Try again once Veo finishes processing it.")
+
+        items = [{"event_id": e["event_id"], "format": f} for e in events for f in ("16:9", "9:16")]
+        update(stage="cutting", progress_pct=60, stage_description=f"Cutting {len(events)} moments into clips...")
+
+        def on_progress(pct: int, desc: str, _item: str, _results: list) -> None:
+            update(stage="cutting", progress_pct=60 + int(pct * 0.39), stage_description=desc)
+
+        res = run_batch_extract_job(job_id=job_id, match_id=slug, items=items, progress_callback=on_progress, classify=False)
+        if res.get("status") == "error":
+            raise RuntimeError(res.get("message") or "Clip cutting failed")
+        update(stage="complete", progress_pct=100,
+               stage_description=f"Imported: {len(events)} moments cut. Pick the game above and run the kit check.")
+    except Exception as exc:
+        logger.exception("Import job %s for %s failed: %s", job_id, slug, exc)
+        update(stage="error", error=str(exc)[:200], stage_description=f"Import failed: {str(exc)[:200]}")
+
+
+@app.route("/api/import-match", methods=["POST"])
+def api_import_match() -> Response:
+    data = request.get_json(silent=True) or {}
+    slug = str(data.get("slug") or "").strip()
+    if not slug:
+        return jsonify({"error": "slug is required"}), 400
+    title = str(data.get("title") or f"SF Fog RFC — {slug.replace('-', ' ').title()}")[:120]
+    job_id = uuid.uuid4().hex[:8]
+    _save_job(job_id, {
+        "job_id": job_id, "match_id": slug, "stage": "starting", "progress_pct": 0,
+        "stage_description": "Starting import...", "error": None,
+        "created_at": time.time(), "updated_at": time.time(),
+    })
+    threading.Thread(target=_process_import_job, args=(job_id, slug, title), daemon=True).start()
+    return jsonify({"status": "processing", "job_id": job_id, "match_id": slug}), 202
 
 
 @app.route("/kit-check/image", methods=["GET"])

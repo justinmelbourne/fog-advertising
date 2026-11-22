@@ -184,3 +184,72 @@ def test_confirming_kits_clears_ai_verdicts_but_keeps_manual(client):
     saved = {e.event_id: e for e in drive.write_manifest.call_args.args[0].events}
     assert saved["veo_evt_034"].classified_by is None and saved["veo_evt_034"].sentiment == "neutral"
     assert saved["veo_evt_001"].classified_by == "manual" and saved["veo_evt_001"].sentiment == "fog_positive"
+
+
+def _veo(recordings):
+    veo = MagicMock()
+    veo.list_club_recordings.return_value = recordings
+    return veo
+
+
+def test_veo_new_lists_only_games_without_a_drive_folder(client):
+    drive = _fake_drive()
+    recs = [
+        {"slug": "20260822-san-francisco-fog-rfc-a-side-vs-sydney-convicts-1-v4fb17b0", "title": "Sydney", "start": "2026-08-22"},
+        {"slug": "20261115-san-francisco-fog-rfc-a-side-vs-berkeley-rfc-v9c0ffee1", "title": "Berkeley", "start": "2026-11-15"},
+    ]
+    with patch.object(main, "DriveClient", return_value=drive), patch.object(main, "VeoApiClient", return_value=_veo(recs)):
+        body = client.get("/api/veo-new").get_json()
+    assert [r["title"] for r in body["recordings"]] == ["Berkeley"]
+    assert body["veo_total"] == 2
+
+
+def test_veo_new_reports_empty_veo_as_error(client):
+    with patch.object(main, "DriveClient", return_value=_fake_drive()), patch.object(main, "VeoApiClient", return_value=_veo([])):
+        resp = client.get("/api/veo-new")
+    assert resp.status_code == 502
+    assert "token" in resp.get_json()["error"]
+
+
+def test_veo_lists_need_key(monkeypatch):
+    monkeypatch.setenv("FOG_API_KEY", "secret")
+    c = main.app.test_client()
+    assert c.get("/api/veo-new").status_code == 401
+    assert c.get("/veo/recordings").status_code == 401
+    assert c.post("/api/import-match", json={"slug": "x"}).status_code == 401
+
+
+def test_import_match_ingests_then_cuts_every_moment_unclassified(client):
+    drive = _fake_drive()
+    drive.read_manifest.side_effect = [None, _fake_drive().read_manifest.return_value]
+
+    def fake_ingest(job_id, slug, title, veo, force):
+        main._save_job(job_id, {"job_id": job_id, "stage": "complete", "progress_pct": 100})
+
+    with patch.object(main, "DriveClient", return_value=drive), \
+         patch.object(main, "VeoApiClient", return_value=_veo([])), \
+         patch.object(main, "_process_veo_ingest_job", side_effect=fake_ingest), \
+         patch.object(main, "run_batch_extract_job", return_value={"status": "complete", "results": []}) as cut:
+        main._save_job("imp1", {"job_id": "imp1", "stage": "starting"})
+        main._process_import_job("imp1", "20261115-fog-vs-berkeley-rfc-v9c0ffee1", "Berkeley")
+    job = main._get_job("imp1")
+    assert job["stage"] == "complete", job
+    kwargs = cut.call_args.kwargs
+    assert kwargs["classify"] is False
+    assert kwargs["items"] == [{"event_id": "veo_evt_034", "format": "16:9"}, {"event_id": "veo_evt_034", "format": "9:16"}]
+
+
+def test_import_match_surfaces_ingest_failure(client):
+    drive = _fake_drive()
+    drive.read_manifest.return_value = None
+
+    def failing_ingest(job_id, slug, title, veo, force):
+        main._save_job(job_id, {"job_id": job_id, "stage": "error", "error": "Could not resolve video URL"})
+
+    with patch.object(main, "DriveClient", return_value=drive), \
+         patch.object(main, "VeoApiClient", return_value=_veo([])), \
+         patch.object(main, "_process_veo_ingest_job", side_effect=failing_ingest):
+        main._save_job("imp2", {"job_id": "imp2", "stage": "starting"})
+        main._process_import_job("imp2", "slug-v9c0ffee1", "X")
+    job = main._get_job("imp2")
+    assert job["stage"] == "error" and "resolve video URL" in job["error"]

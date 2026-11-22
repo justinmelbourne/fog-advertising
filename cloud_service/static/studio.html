@@ -106,6 +106,19 @@
       <button class="fog-button fog-button--secondary" id="reloadMatches" type="button">Refresh</button>
     </div>
     <div id="matchStatus" class="row" style="margin-top:12px"></div>
+    <div class="panel" style="margin-top:16px">
+      <h3>New games on Veo</h3>
+      <p class="muted">A game shows up in the list above only after it's imported. Importing pulls the video into Drive and cuts every Veo-tagged moment (about 10–20 minutes).</p>
+      <div class="row">
+        <button class="fog-button fog-button--secondary" id="checkVeo" type="button">Check Veo for new games</button>
+      </div>
+      <div id="veoList"></div>
+      <div id="importPanel" class="hidden">
+        <div class="progress"><div id="importBar"></div></div>
+        <div id="importText" class="muted"></div>
+      </div>
+      <div id="veoMsg"></div>
+    </div>
   </section>
 
   <section class="step">
@@ -308,6 +321,59 @@
 
   $("saveKey").addEventListener("click", () => { writeKey($("apiKey").value); $("keyState").textContent = "Saved on this device"; loadMatches(); });
   $("reloadMatches").addEventListener("click", loadMatches);
+
+  let importing = false;
+  async function checkVeo() {
+    const list = $("veoList");
+    list.textContent = "";
+    message("veoMsg", "Checking Veo…");
+    try {
+      const data = await api("/api/veo-new");
+      message("veoMsg", data.recordings.length ? "" : `Nothing new: all ${data.veo_total} Veo games are already imported.`, data.recordings.length ? "" : "ok");
+      data.recordings.forEach(r => {
+        const row = document.createElement("div");
+        row.className = "row";
+        row.style.marginTop = "8px";
+        const label = document.createElement("span");
+        label.textContent = `${(r.start || "").slice(0, 10)} · ${r.title}`;
+        row.appendChild(label);
+        if (r.is_expired) row.appendChild(tag("Expired on Veo"));
+        else if (r.status && !/^(done|processed|finished|complete)/i.test(r.status)) row.appendChild(tag(`Veo: ${r.status}`));
+        const btn = document.createElement("button");
+        btn.className = "fog-button";
+        btn.type = "button";
+        btn.textContent = "Import";
+        btn.disabled = r.is_expired;
+        btn.addEventListener("click", () => importMatch(r, btn));
+        row.appendChild(btn);
+        list.appendChild(row);
+      });
+    } catch (e) { message("veoMsg", e.message, "error"); }
+  }
+
+  async function importMatch(r, btn) {
+    if (importing) return;
+    importing = true;
+    document.querySelectorAll("#veoList button").forEach(b => { b.disabled = true; });
+    $("importPanel").classList.remove("hidden");
+    $("importBar").style.width = "0%";
+    $("importText").textContent = `Importing ${r.title}…`;
+    message("veoMsg", "");
+    try {
+      const job = await api("/api/import-match", { method: "POST", body: { slug: r.slug, title: r.title } });
+      await pollJob(job.job_id, $("importBar"), $("importText"), async (done) => {
+        importing = false;
+        if (done.stage === "error") { message("veoMsg", done.error || done.stage_description || "Import failed", "error"); }
+        else { message("veoMsg", done.stage_description, "ok"); await loadMatches(); }
+        checkVeo();
+      });
+    } catch (e) {
+      importing = false;
+      message("veoMsg", e.message, "error");
+      btn.disabled = false;
+    }
+  }
+  $("checkVeo").addEventListener("click", checkVeo);
   $("matchSelect").addEventListener("change", (e) => { currentMatch = e.target.value; loadStatus(); });
 
   $("runKit").addEventListener("click", async () => {

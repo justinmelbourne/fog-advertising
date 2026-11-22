@@ -220,6 +220,7 @@ def run_batch_extract_job(
     match_id: str,
     items: list[dict[str, str]],
     progress_callback: Optional[Any] = None,
+    classify: bool = True,
 ) -> dict:
     """
     Execute batch clip extraction and aspect-ratio reframing for multiple events.
@@ -258,6 +259,7 @@ def run_batch_extract_job(
         downloaded_sources: dict[str, str] = {}
         # Cache master cuts so multiple aspect ratios for the same event don't re-cut
         cut_masters: dict[str, str] = {}
+        verdicts: dict[str, dict] = {}
 
         if progress_callback:
             progress_callback(5, "Resolving match source video...", "", results)
@@ -340,14 +342,23 @@ def run_batch_extract_job(
                     _run_ffmpeg(reframe_cmd)
 
                 # 4. Determine sentiment & subfolder routing
-                sentiment_info = classify_event_sentiment(
-                    event_id=event.event_id,
-                    event_type=event.event_type,
-                    description=event.description,
-                    start_time=event.start_time,
-                    end_time=event.end_time,
-                    video_path=master_path,
-                )
+                # classify=False files everything under Needs Review; the kit-checked
+                # organize step sorts it later. The 9:16 copy reuses the 16:9 verdict.
+                if not classify:
+                    sentiment_info = {"sentiment": "neutral"}
+                elif event_id in verdicts:
+                    sentiment_info = verdicts[event_id]
+                else:
+                    # master_path is the cut clip, so times are relative to it
+                    sentiment_info = classify_event_sentiment(
+                        event_id=event.event_id,
+                        event_type=event.event_type,
+                        description=event.description,
+                        start_time=0.0,
+                        end_time=max(event.end_time - event.start_time, 1.0),
+                        video_path=master_path,
+                    )
+                    verdicts[event_id] = sentiment_info
                 primary_folder, nested_subfolder = get_target_subfolder_path(
                     event.event_type,
                     sentiment=sentiment_info["sentiment"],
